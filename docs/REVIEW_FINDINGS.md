@@ -35,7 +35,7 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] B11 `market_price` provenance (FR-6): add sha256 + license_note (migration 0004), filled by ingest/market.py (one-line edit OK) with a Yahoo license note.
 - [x] B12 `ingest_failure` unique (flow, key, error_class) in migration 0004 named `uq_ingest_failure` (group C switches record_failure to on_conflict).
 - [x] B13 Compose: bind db and api ports to 127.0.0.1; api container must not get ANTHROPIC_API_KEY (worker only); `.env.example` POSTGRES_PASSWORD empty so `:?` fails closed.
-- [ ] B14 CI: eval-gate — scope ANTHROPIC_API_KEY to the gate step, `persist-credentials: false`, pin actions to commit SHAs, pass base_ref via env; ci.yml top-level `permissions: contents: read`, persist-credentials false; ruff must pass on the whole repo (fix lint across repo at the end, coordinate last).
+- [x] B14 CI: eval-gate — scope ANTHROPIC_API_KEY to the gate step, `persist-credentials: false`, pin actions to commit SHAs, pass base_ref via env; ci.yml top-level `permissions: contents: read`, persist-credentials false; ruff must pass on the whole repo (fix lint across repo at the end, coordinate last).
 - [x] B15 Dockerfile worker image: install ffmpeg + poppler-utils (pdftotext) when EXTRAS includes ml.
 - [x] B16 FY reports always fail (releases labelled Q4): map --fp FY to the Q4 release, or reject FY with a clear 422/CLI error. Makefile backfill includes audio (FOMC eval set) and `make evals` runs all evals. Call-audio flow must pass fiscal_year/period (ingest/flows.py).
 - [x] B17 Offline mode is silent: report view shows `mode: offline (no LLM credentials)` when verdict.model is NULL.
