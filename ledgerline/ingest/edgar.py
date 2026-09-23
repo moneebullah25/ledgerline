@@ -45,6 +45,7 @@ def ingest_filings(s: Session, ticker: str, quarters: int = 6) -> int:
     known = set(s.scalars(select(Filing.accession_no).where(Filing.company_id == company_id)))
 
     reports = [r for r in rows if r["form"] in ("10-Q", "10-K")]
+    _fill_untagged(reports, periods)
     releases = [r for r in rows if r["form"] == "8-K" and "2.02" in r["items"].split(",")]
     todo = reports[:quarters] + releases[:quarters + EXTRA_RELEASES]
     inserted = 0
@@ -84,6 +85,23 @@ def _filing_periods(cik: str) -> dict[str, tuple[int, str]]:
                 if f.get("fy") and f.get("fp"):
                     out.setdefault(f["accn"], (f["fy"], f["fp"]))
     return out
+
+
+NEXT_FP = {"Q1": "Q2", "Q2": "Q3", "Q3": "FY", "FY": "Q1"}
+
+
+def _fill_untagged(reports: list[dict], periods: dict[str, tuple[int, str]]) -> None:
+    """companyfacts lags EDGAR by days to weeks, so the newest 10-Q may have no fy/fp yet.
+    Such a filing gets the fiscal period after the previous filing's: 10-Q/10-K filings
+    come one per quarter, in order. Without a tagged predecessor exactly one quarter earlier
+    it stays unlabeled rather than guessed."""
+    for prev, r in zip(reports[::-1], reports[::-1][1:]):  # oldest first
+        gap = (date.fromisoformat(r["reportDate"] or "1900-01-01")
+               - date.fromisoformat(prev["reportDate"] or "2999-01-01")).days
+        if r["accessionNumber"] not in periods and prev["accessionNumber"] in periods \
+                and 80 <= gap <= 100:
+            fy, fp = periods[prev["accessionNumber"]]
+            periods[r["accessionNumber"]] = (fy + 1 if fp == "FY" else fy, NEXT_FP[fp])
 
 
 def _release_period(filed: date, reports: list[dict],

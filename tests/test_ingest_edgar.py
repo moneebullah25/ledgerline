@@ -87,3 +87,12 @@ def test_second_run_inserts_nothing(db, monkeypatch, tmp_path):
     assert db.scalar(select(func.count()).select_from(Filing)) == 2
     assert db.scalar(select(func.count()).select_from(XbrlFact)) == 1
     assert db.scalar(select(func.count()).select_from(IngestFailure)) == 1  # not duplicated
+
+
+def test_untagged_newest_filing_steps_the_fiscal_cycle():
+    periods = {"q2": (2025, "Q2"), "k": (2024, "FY")}  # q3 not in companyfacts yet
+    edgar._fill_untagged(REPORTS, periods)
+    assert periods["q3"] == (2025, "Q3")
+    periods = {"k": (2024, "FY")}  # k -> q2 skips a quarter: no guess, and none after it
+    edgar._fill_untagged(REPORTS, periods)
+    assert periods == {"k": (2024, "FY")}

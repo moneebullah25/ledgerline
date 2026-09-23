@@ -5,9 +5,10 @@ stored bytes: no clocks, no network, no parser choice left to autodetection.
 """
 
 import re
+import warnings
 from pathlib import PurePath
 
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup, NavigableString, XMLParsedAsHTMLWarning
 
 from ledgerline.ingest.objects import read_object
 from ledgerline.models import Filing
@@ -16,6 +17,9 @@ _BLOCK = ("p", "div", "br", "li", "ul", "ol", "table", "h1", "h2", "h3", "h4", "
           "section", "article", "center", "blockquote", "pre", "hr")
 _HIDDEN = re.compile(r"display\s*:\s*none", re.IGNORECASE)
 _WS = re.compile(r"[ \t\r\f\v\xa0\u2002\u2003\u2009\u200b]+")
+# Inline-XBRL documents are XHTML; the HTML parser is used on purpose so every filing goes
+# through one code path.
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 _BREAK = "\x1e"  # marks a block boundary; source newlines inside a paragraph are spaces
 
 
