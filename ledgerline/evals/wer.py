@@ -44,14 +44,20 @@ def _tokens(turns: list[dict]) -> tuple[list[str], list[int]]:
     return toks, owner
 
 
+ANCHOR = 5  # words; shorter matches ("thank you") recur all over a transcript
+
+
 def align(ref: list[str], hyp: list[str]) -> tuple[int, dict[int, int]]:
     """(end of the reference portion the hypothesis covers, hyp index -> ref index for
-    matched tokens). The cut drops reference words after the last match, so trailing
-    deletions at the excerpt boundary are not counted."""
-    blocks = SequenceMatcher(None, ref, hyp, autojunk=False).get_matching_blocks()
-    pairs = {b.b + k: b.a + k for b in blocks for k in range(b.size)}
-    last = max((b for b in blocks if b.size), key=lambda b: b.a, default=None)
-    return (last.a + last.size if last else 0), pairs
+    matched tokens). The cut is the end of the last match of >= ANCHOR words: a stray short
+    match of the excerpt's final words far ahead in the reference would otherwise count
+    the whole gap as deletions. Trailing deletions at the excerpt boundary are not counted."""
+    blocks = [b for b in SequenceMatcher(None, ref, hyp, autojunk=False).get_matching_blocks()
+              if b.size]
+    anchors = [b for b in blocks if b.size >= ANCHOR] or blocks
+    cut = max((b.a + b.size for b in anchors), default=0)
+    pairs = {b.b + k: b.a + k for b in blocks if b.a < cut for k in range(b.size)}
+    return cut, pairs
 
 
 def label_accuracy(hyp_turns, hyp_owner, ref_turns, ref_owner, pairs, key) -> dict:

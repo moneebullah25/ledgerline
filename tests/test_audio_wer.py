@@ -13,6 +13,14 @@ def test_align_cuts_reference_at_excerpt_end():
     assert pairs == {0: 0, 1: 1, 3: 3, 4: 4}
 
 
+def test_align_ignores_stray_short_match_far_ahead():
+    ref = [f"w{i}" for i in range(20)] + ["thank", "you"]
+    hyp = [f"w{i}" for i in range(8)] + ["thank", "you"]
+    cut, pairs = align(ref, hyp)
+    assert cut == 8
+    assert set(pairs) == set(range(8))
+
+
 def test_label_accuracy_by_aligned_words():
     ref_turns = [{"text": "good afternoon everyone", "role": "executive"},
                  {"text": "steve", "role": "operator"},
