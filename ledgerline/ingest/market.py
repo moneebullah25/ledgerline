@@ -28,9 +28,17 @@ def ingest_market_data(s: Session, ticker: str, start: date, end: date) -> int:
     rows = [r | prov for r in parse_chart(json.loads(raw), ticker, url)]
     if not rows:
         return 0
-    # ponytail: first write wins, so adj_close is not re-based after later dividends/splits;
-    # delete and reload a ticker if abnormal returns ever span a corporate action.
-    stmt = insert(MarketPrice).on_conflict_do_nothing(constraint="uq_price").returning(MarketPrice.id)
+    # Yahoo re-bases the whole history after a split or dividend (close for splits, adj_close
+    # for both), so every re-fetched day is upserted: stored returns follow the latest basis.
+    # Returns rows inserted or re-based.
+    stmt = insert(MarketPrice)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_price",
+        set_={c: stmt.excluded[c] for c in ("close", "adj_close", "volume", "source_url",
+                                            "fetched_at", "sha256", "license_note")},
+        where=(MarketPrice.close != stmt.excluded.close)
+        | (MarketPrice.adj_close != stmt.excluded.adj_close),
+    ).returning(MarketPrice.id)
     return len(s.execute(stmt, rows).all())
 
 

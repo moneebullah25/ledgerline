@@ -9,13 +9,19 @@ import re
 from datetime import UTC, date, datetime
 from pathlib import PurePosixPath
 
+import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from ledgerline.concepts import UNIVERSE
-from ledgerline.ingest.http import PermanentFetchError, record_failure, sec_get
+from ledgerline.ingest.http import (
+    PermanentFetchError,
+    TransientFetchError,
+    record_failure,
+    sec_get,
+)
 from ledgerline.ingest.objects import put_object
 from ledgerline.models import Company, Filing
 
@@ -60,7 +66,9 @@ def ingest_filings(s: Session, ticker: str, quarters: int = 6) -> int:
                 doc = r["primaryDocument"]
                 fy, fp = periods.get(r["accessionNumber"], (None, None))
             inserted += _store(s, company_id, cik, r, doc, fy, fp)
-        except (PermanentFetchError, LookupError, ValueError) as e:
+        # Retries exhausted on one document: record it and move on to the next filing.
+        except (PermanentFetchError, TransientFetchError, httpx.TransportError,
+                LookupError, ValueError) as e:
             record_failure(s, "ingest_edgar_filings", f"{ticker}:{r['accessionNumber']}", e)
     return inserted
 

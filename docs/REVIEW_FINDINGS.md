@@ -43,16 +43,16 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] B19 NFR-3/NFR-1: record and surface cost and latency per report in the report view; warn when over $3.00 / 20 min.
 
 ## C. Ingest + test infrastructure (`ledgerline/ingest/**` except market.py one-liner, `tests/conftest.py`, `config.py`, `tests/test_ingest_*`)
-- [ ] C1 conftest: per-session test database name (pid/uuid suffix), drop it at session end; force `LEDGERLINE_LLM_ENABLED=false` by assignment and delete ANTHROPIC_API_KEY/AUTH_TOKEN (autouse); resolve .env/alembic.ini relative to the repo root; skip cleanly if Postgres is unreachable or CREATEDB is denied; `pytest.importorskip` in ml tests.
-- [ ] C2 FR-7 idempotency test bypasses the DB constraint (`known` pre-filter): add a test calling `_store` twice. (ingest/edgar.py:45,53,152)
-- [ ] C3 `record_failure` check-then-insert races: use on_conflict against `uq_ingest_failure` (from B12). Exhausted transient retries (`TransientFetchError`, `httpx.TransportError`) must become `http_transient_exhausted` rows instead of aborting the ticker. Test both.
-- [ ] C4 XBRL re-run with a CHANGED payload (amendment changes a YTD base): derived quarters must not silently keep a stale value; test it.
-- [ ] C5 429 retry honours `Retry-After`. SEC throttle is per-process: document (ponytail comment) — no cross-process lock.
-- [ ] C6 `sec_user_agent` must contain a contact (email address pattern); fail closed otherwise. (config.py)
-- [ ] C7 `read_object` must resolve under data_dir (reject traversal). Download size caps on http.get / call_audio / fomc.
-- [ ] C8 fomc.py: `urljoin(master, uri)` for relative HLS URIs, require https, ffmpeg `-protocol_whitelist https,tls,tcp,crypto,hls`. call_audio.py: https-only host allowlist + audio suffix allowlist (local paths allowed only under an explicit directory).
-- [ ] C9 html_to_text: also drop `visibility:hidden`, `font-size:0` styled elements (injection hiding). Keep load_text byte-stable for existing stored objects (existing chunk offsets must still slice exactly — verify).
-- [ ] C10 Market prices never re-based after splits/dividends: refresh the last N days on each run (upsert adj_close) or document with the ponytail comment already present — implement the upsert.
+- [x] C1 conftest: per-session test database name (pid/uuid suffix), drop it at session end; force `LEDGERLINE_LLM_ENABLED=false` by assignment and delete ANTHROPIC_API_KEY/AUTH_TOKEN (autouse); resolve .env/alembic.ini relative to the repo root; skip cleanly if Postgres is unreachable or CREATEDB is denied; `pytest.importorskip` in ml tests.
+- [x] C2 FR-7 idempotency test bypasses the DB constraint (`known` pre-filter): add a test calling `_store` twice. (ingest/edgar.py:45,53,152)
+- [x] C3 `record_failure` check-then-insert races: use on_conflict against `uq_ingest_failure` (from B12). Exhausted transient retries (`TransientFetchError`, `httpx.TransportError`) must become `http_transient_exhausted` rows instead of aborting the ticker. Test both.
+- [x] C4 XBRL re-run with a CHANGED payload (amendment changes a YTD base): derived quarters must not silently keep a stale value; test it.
+- [x] C5 429 retry honours `Retry-After`. SEC throttle is per-process: document (ponytail comment) — no cross-process lock.
+- [x] C6 `sec_user_agent` must contain a contact (email address pattern); fail closed otherwise. (config.py)
+- [x] C7 `read_object` must resolve under data_dir (reject traversal). Download size caps on http.get / call_audio / fomc.
+- [x] C8 fomc.py: `urljoin(master, uri)` for relative HLS URIs, require https, ffmpeg `-protocol_whitelist https,tls,tcp,crypto,hls`. call_audio.py: https-only host allowlist + audio suffix allowlist (local paths allowed only under an explicit directory).
+- [x] C9 html_to_text: also drop `visibility:hidden`, `font-size:0` styled elements (injection hiding). Keep load_text byte-stable for existing stored objects (existing chunk offsets must still slice exactly — verify).
+- [x] C10 Market prices never re-based after splits/dividends: refresh the last N days on each run (upsert adj_close) or document with the ponytail comment already present — implement the upsert.
 
 ## D. Evaluation harness L2-L4 (`ledgerline/evals/{l2,l3,l4,golden}.py`, `ledgerline/evals/data/golden*.jsonl`, `evals/baseline.json`, eval-gate wiring with B)
 - [ ] D1 Frozen golden set, 200 claims (floor 120), stratified by company/type/metric with a fixed seed, labeled blind to system output with source evidence recorded per label; plus a clearly separated perturbation set (real claims with injected wrong values/periods) because real contradictions are rare. Second-pass review of the most consequential labels; report inter-pass agreement.

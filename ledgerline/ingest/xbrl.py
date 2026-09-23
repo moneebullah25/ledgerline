@@ -18,7 +18,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -39,6 +39,7 @@ PREV = {"Q2": "Q1", "Q3": "Q2", "Q4": "Q3"}
 
 
 def ingest_xbrl_facts(s: Session, ticker: str) -> int:
+    """Rows inserted, changed or deleted; 0 when re-run over an unchanged payload."""
     cik = UNIVERSE[ticker]
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     raw = sec_get(url)
@@ -61,11 +62,27 @@ def ingest_xbrl_facts(s: Session, ticker: str) -> int:
         acc = r["accession_no"]
         r |= {"company_id": company_id, "fetched_at": now, "sha256": sha, "license_note": LICENSE,
               "source_url": f"{ARCHIVES}/{int(cik)}/{acc.replace('-', '')}/{acc}-index.html"}
-    inserted = 0
-    for i in range(0, len(rows), 2000):
-        stmt = insert(XbrlFact).on_conflict_do_nothing(constraint="uq_xbrl_fact").returning(XbrlFact.id)
-        inserted += len(s.execute(stmt, rows[i:i + 2000]).all())
-    return inserted
+    # A changed payload (a corrected value, an amendment that moves a YTD base) must not
+    # leave a stale number behind: rows whose value or derived flag changed are updated,
+    # and derived quarters the new payload no longer produces are deleted.
+    stmt = insert(XbrlFact)
+    stmt = stmt.on_conflict_do_update(
+        constraint="uq_xbrl_fact",
+        set_={c: stmt.excluded[c] for c in ("value", "derived", "fiscal_year", "fiscal_period",
+                                            "duration_days", "form", "filed", "fetched_at",
+                                            "sha256")},
+        where=(XbrlFact.value != stmt.excluded.value) | (XbrlFact.derived != stmt.excluded.derived),
+    ).returning(XbrlFact.id)
+    written = sum(len(s.execute(stmt, rows[i:i + 2000]).all()) for i in range(0, len(rows), 2000))
+
+    derived = {_key(r) for r in rows if r["derived"]}
+    existing = s.execute(select(XbrlFact.id, XbrlFact.tag, XbrlFact.unit, XbrlFact.period_start,
+                                XbrlFact.period_end, XbrlFact.accession_no)
+                         .where(XbrlFact.company_id == company_id, XbrlFact.derived))
+    stale = [i for i, *k in existing if tuple(k) not in derived]
+    if stale:
+        s.execute(delete(XbrlFact).where(XbrlFact.id.in_(stale)))
+    return written + len(stale)
 
 
 def span(start: date | None, end: date) -> str | None:
@@ -112,10 +129,16 @@ def parse_companyfacts(payload: dict) -> list[dict]:
             continue  # prior-period comparative: fy/fp belong to the filing, not to it
         if f["fiscal_period"] == "FY" and span(f["period_start"], f["period_end"]) == "Q":
             f["fiscal_period"] = "Q4"
-        key = (f["tag"], f["unit"], f["period_start"], f["period_end"], f["accession_no"])
-        rows.setdefault(key, f)
+        rows.setdefault(_key(f), f)
     out = list(rows.values())
-    return out + _derive_quarters(out)
+    # A derived quarter can coincide with a filed row (PepsiCo tags its 16-week Q4 under
+    # fp=FY): the filed row is the one kept, as the unique key allows only one.
+    return out + [d for d in _derive_quarters(out) if _key(d) not in rows]
+
+
+def _key(f: dict) -> tuple:
+    """uq_xbrl_fact within one company."""
+    return (f["tag"], f["unit"], f["period_start"], f["period_end"], f["accession_no"])
 
 
 def _original_first(f: dict) -> tuple:

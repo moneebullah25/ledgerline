@@ -3,13 +3,15 @@
 import json
 from datetime import date
 
+import httpx
 import pytest
 from sqlalchemy import func, select
 
 from ledgerline.config import settings
-from ledgerline.ingest import edgar, xbrl
+from ledgerline.ingest import edgar, market, xbrl
 from ledgerline.ingest.edgar import _release_period
-from ledgerline.models import Filing, IngestFailure, XbrlFact
+from ledgerline.ingest.http import TransientFetchError, record_failure
+from ledgerline.models import Filing, IngestFailure, MarketPrice, XbrlFact
 
 REPORTS = [  # newest first, as EDGAR lists them
     {"accessionNumber": "q3", "form": "10-Q", "reportDate": "2025-06-28"},
@@ -96,3 +98,99 @@ def test_untagged_newest_filing_steps_the_fiscal_cycle():
     periods = {"k": (2024, "FY")}  # k -> q2 skips a quarter: no guess, and none after it
     edgar._fill_untagged(REPORTS, periods)
     assert periods == {"k": (2024, "FY")}
+
+
+@pytest.mark.db
+def test_store_is_idempotent_at_the_database(db, monkeypatch, tmp_path):
+    # Bypasses ingest_filings' `known` pre-filter: the unique accession_no alone must hold.
+    monkeypatch.setattr(settings(), "data_dir", tmp_path)
+    monkeypatch.setattr(edgar, "sec_get", fake_sec)
+    company_id = edgar.ensure_company(db, "AAPL", "Apple Inc.")
+    r = {"accessionNumber": "q1", "form": "10-Q", "filingDate": "2025-01-31",
+         "reportDate": "2024-12-28"}
+    assert edgar._store(db, company_id, "0000320193", r, "q1.htm", 2025, "Q1") == 1
+    assert edgar._store(db, company_id, "0000320193", r, "q1.htm", 2025, "Q1") == 0
+    assert db.scalar(select(func.count()).select_from(Filing)) == 1
+
+
+@pytest.mark.db
+def test_record_failure_is_one_row_without_a_pre_check(db):
+    for _ in range(2):
+        record_failure(db, "ingest_edgar_filings", "AAPL:x", ValueError("bad"))
+    record_failure(db, "ingest_edgar_filings", "AAPL:x", KeyError("k"))  # another class
+    rows = db.execute(select(IngestFailure.key, IngestFailure.error_class)).all()
+    assert sorted(rows) == [("AAPL:x", "parse"), ("AAPL:x", "schema_drift")]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("exc", [TransientFetchError("HTTP 503"), httpx.ConnectError("reset")])
+def test_exhausted_retries_become_a_row_and_the_ticker_continues(db, monkeypatch, tmp_path, exc):
+    monkeypatch.setattr(settings(), "data_dir", tmp_path)
+
+    def flaky(url):
+        if url.endswith("q1.htm"):
+            raise exc
+        return fake_sec(url)
+
+    monkeypatch.setattr(edgar, "sec_get", flaky)
+    assert edgar.ingest_filings(db, "AAPL", quarters=2) == 1  # r1 still stored
+    fails = db.execute(select(IngestFailure.key, IngestFailure.error_class)).all()
+    assert ("AAPL:q1", "http_transient_exhausted") in fails
+
+
+def ocf(*facts):
+    return {"entityName": "Apple Inc.", "facts": {"us-gaap": {
+        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": list(facts)}}}}}
+
+
+Q1 = {"start": "2024-09-29", "end": "2024-12-28", "val": 30, "accn": "a1", "fy": 2025,
+      "fp": "Q1", "form": "10-Q", "filed": "2025-01-31"}
+H1 = {"start": "2024-09-29", "end": "2025-03-29", "val": 50, "accn": "a2", "fy": 2025,
+      "fp": "Q2", "form": "10-Q", "filed": "2025-05-01"}
+
+
+@pytest.mark.db
+def test_changed_payload_rebases_derived_quarters(db, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings(), "data_dir", tmp_path)
+    payload = {}
+    monkeypatch.setattr(xbrl, "sec_get", lambda url: json.dumps(payload).encode())
+
+    def derived():
+        return db.execute(select(XbrlFact.fiscal_period, XbrlFact.value)
+                          .where(XbrlFact.derived)).all()
+
+    payload = ocf(Q1, H1)
+    assert xbrl.ingest_xbrl_facts(db, "AAPL") == 3  # Q1, H1, derived Q2 = 20
+    assert derived() == [("Q2", 20)]
+    assert xbrl.ingest_xbrl_facts(db, "AAPL") == 0
+
+    payload = ocf(Q1, H1 | {"val": 55})  # the YTD base moved (restated in place)
+    assert xbrl.ingest_xbrl_facts(db, "AAPL") == 2  # H1 and the derived Q2 updated
+    assert derived() == [("Q2", 25)]
+
+    # An amendment files the 3-month Q2 itself: the derived stand-in is deleted, not kept.
+    q2 = H1 | {"start": "2024-12-29", "val": 24, "accn": "a2x", "form": "10-Q/A"}
+    payload = ocf(Q1, H1 | {"val": 55}, q2)
+    assert xbrl.ingest_xbrl_facts(db, "AAPL") == 2  # q2 inserted, derived Q2 deleted
+    assert derived() == []
+    assert db.scalar(select(func.count()).select_from(XbrlFact)) == 3
+
+
+def chart(adj):
+    return json.dumps({"chart": {"result": [{
+        "meta": {"gmtoffset": -14400}, "timestamp": [1756992600],
+        "indicators": {"quote": [{"close": [239.78], "volume": [100]}],
+                       "adjclose": [{"adjclose": [adj]}]}}]}}).encode()
+
+
+@pytest.mark.db
+def test_market_prices_rebased_on_refetch(db, monkeypatch):
+    body = chart(238.9)
+    monkeypatch.setattr(market, "get", lambda url, headers: body)
+    day = date(2025, 9, 4)
+    assert market.ingest_market_data(db, "AAPL", day, day) == 1
+    assert market.ingest_market_data(db, "AAPL", day, day) == 0
+    body = chart(237.5)  # a later dividend re-based the history
+    assert market.ingest_market_data(db, "AAPL", day, day) == 1
+    row = db.scalars(select(MarketPrice)).one()
+    assert row.adj_close == 237.5 and row.sha256 != "unrecorded"

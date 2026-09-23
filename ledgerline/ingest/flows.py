@@ -6,7 +6,7 @@ stored as an ingest_failure row, so one bad filer never stops the rest (NFR-4).
 
 import logging
 from collections.abc import Callable
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from prefect import flow
 from sqlalchemy import select
@@ -42,7 +42,7 @@ def run_facts(tickers: list[str]) -> dict[str, int | None]:
 
 def run_prices(tickers: list[str], start: date | None = None,
                end: date | None = None) -> dict[str, int | None]:
-    end = end or date.today()
+    end = end or datetime.now(UTC).date()
     start = start or end - timedelta(days=365 * PRICE_YEARS)
     return {t: guarded("ingest_market_data", t, market.ingest_market_data, t, start, end)
             for t in dict.fromkeys([*tickers, market.BENCHMARK])}

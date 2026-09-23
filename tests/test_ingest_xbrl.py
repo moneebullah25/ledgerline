@@ -108,3 +108,17 @@ def test_schema_drift_raises():
         parse_companyfacts({"entityName": "X"})
     with pytest.raises(KeyError):
         parse_companyfacts(payload(SomeUnmappedTag=YEAR["SomeUnmappedTag"]))
+
+
+def test_derived_quarter_never_duplicates_a_filed_key():
+    # PepsiCo-style 12/12/12/16-week year: the 16-week Q4 is tagged under fp=FY and not
+    # relabeled (span "other"), and FY - (Q1+Q2+Q3) lands on the same (period, accession)
+    # key. Only the filed row stays.
+    rows = parse_companyfacts(payload(**{REV: {"USD": [
+        f("2024-09-29", "2024-12-21", 80, "a1", 2025, "Q1"),
+        f("2024-12-22", "2025-03-15", 80, "a2", 2025, "Q2"),
+        f("2025-03-16", "2025-06-07", 90, "a3", 2025, "Q3"),
+        f("2024-09-29", "2025-09-27", 350, "k", 2025, "FY", "10-K"),
+        f("2025-06-08", "2025-09-27", 100, "k", 2025, "FY", "10-K")]}}))
+    same = [r for r in rows if str(r["period_start"]) == "2025-06-08"]
+    assert [(r["value"], r["derived"]) for r in same] == [(100, False)]
