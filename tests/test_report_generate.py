@@ -71,7 +71,7 @@ def seed_report(s, n_claims: int = 3, ticker: str = "AAPL") -> Report:
         s.add(Evidence(report_id=report.id, claim_id=claim.id, agent="xbrl_table",
                        stance="contradicts", summary="Filed revenue is lower.",
                        citations=[c.model_dump() for c in cites[:1]],
-                       payload={"relative_error": 0.0315}, trace_id=trace))
+                       payload={"deviation": -0.0315}, trace_id=trace))
         s.add(Verdict(
             report_id=report.id, claim_id=claim.id,
             label="contradicted" if first else "supported", confidence=0.9 if first else 0.8,
@@ -127,3 +127,55 @@ def test_uncited_rationale_is_flagged(db):
 @pytest.mark.db
 def test_unknown_report(db):
     assert build_report(db, uuid.uuid4()) is None
+
+
+@pytest.mark.db
+def test_audit_uses_resolved_rows_not_the_verdicts_copy(db):
+    """B3: a verdict whose citation copy carries a fabricated value cannot vouch for it."""
+    report = seed_report(db, n_claims=1)
+    v = db.query(Verdict).filter_by(report_id=report.id).one()
+    fact_id = v.citations[0]["ref_id"]
+    v.citations = [Citation(kind="xbrl_fact", ref_id=fact_id, value=91.2e9, unit="USD")
+                   .model_dump()]
+    v.rationale = "Filed revenue was $91.2 billion."
+    db.flush()
+    finding = build_report(db, report.id).claims[0]
+    assert finding.sources[0].value == 94036000000.0  # the row wins
+    assert finding.uncited_numbers == [91.2]
+
+
+@pytest.mark.db
+def test_computed_citation_is_rendered_and_citable(db):
+    report = seed_report(db, n_claims=1)
+    v = db.query(Verdict).filter_by(report_id=report.id).one()
+    v.citations = v.citations[:1] + [Citation(
+        kind="computed", ref_id="revenue:2025Q3:yoy_change", value=5.4, unit="percent",
+    ).model_dump()]
+    v.rationale = "Revenue grew 5.4% year over year."
+    db.flush()
+    view = build_report(db, report.id)
+    src = view.claims[0].sources[1]
+    assert src.kind == "computed" and src.value == 5.4 and src.url is None
+    assert src.label.startswith("computed from the cited facts")
+    assert view.claims[0].uncited_numbers == []
+    assert "computed from the cited facts (revenue:2025Q3:yoy_change): 5.4 percent" in (
+        to_markdown(view))
+
+
+@pytest.mark.db
+def test_offline_mode_and_budget_warnings_are_shown(db):
+    report = seed_report(db, n_claims=1)  # model=None: the offline adjudicator
+    report.cost_usd, report.latency_s = 3.5, 1500.0
+    db.flush()
+    view = build_report(db, report.id)
+    assert view.mode == "offline (no LLM credentials)"
+    assert len(view.warnings) == 2
+    md = to_markdown(view)
+    assert "mode: offline (no LLM credentials)" in md
+    assert "over the 3.00 USD budget" in md and "over the 20 min budget" in md
+
+    db.query(Verdict).filter_by(report_id=report.id).one().model = "claude-opus-5"
+    report.cost_usd, report.latency_s = 0.4, 60.0
+    db.flush()
+    view = build_report(db, report.id)
+    assert (view.mode, view.warnings) == ("online", [])

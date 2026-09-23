@@ -24,6 +24,11 @@ from ledgerline.models import (
 )
 from ledgerline.schemas import Citation, uncited_numbers
 
+# NFR-3 / NFR-1 budgets per report.
+COST_BUDGET_USD = 3.00
+LATENCY_BUDGET_S = 20 * 60
+OFFLINE = "offline (no LLM credentials)"
+
 
 class Source(BaseModel):
     kind: str
@@ -46,6 +51,7 @@ class Finding(BaseModel):
     confidence: float
     severity: float
     refused: bool
+    model: str | None  # None: the deterministic offline adjudicator (or a refusal) decided
     rationale: str
     sources: list[Source]
     uncited_numbers: list[float]  # empty = the rationale passes FR-45
@@ -62,6 +68,8 @@ class ReportView(BaseModel):
     latency_s: float | None
     cost_usd: float | None
     error: str | None
+    mode: str | None  # "online" if any verdict came from a model, else OFFLINE; None: no claims
+    warnings: list[str]  # budget overruns (NFR-1 latency, NFR-3 cost)
     claims: list[Finding]
 
 
@@ -109,6 +117,9 @@ def _resolve(s: Session, cik: str, cites: list[Citation]) -> dict[tuple[str, str
 
 
 def _source(c: Citation, resolved: dict[tuple[str, str], Source]) -> Source:
+    if c.kind == "computed":  # verifier-derived from the facts cited alongside; no row to open
+        return Source(kind=c.kind, ref_id=c.ref_id, value=c.value, unit=c.unit,
+                      label=f"computed from the cited facts ({c.ref_id})")
     base = resolved.get((c.kind, str(c.ref_id)))
     if base is None:  # forecast outputs, or a row that no longer exists: show what was cited
         return Source(kind=c.kind, ref_id=c.ref_id, label=f"{c.kind} {c.ref_id}",
@@ -135,22 +146,31 @@ def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
     findings = []
     for v, claim in pairs:
         sources = [_source(c, resolved) for c in cites[v.id]]
-        # Check against what the reader sees: resolved row values, not only the agent's copy.
-        shown = cites[v.id] + [Citation(kind=x.kind, ref_id=x.ref_id, value=x.value,
-                                        quote=x.quote) for x in sources]
+        # Audit against what the reader sees: resolved row values, never the verdict's own copy.
+        shown = [Citation(kind=x.kind, ref_id=x.ref_id, value=x.value, quote=x.quote)
+                 for x in sources]
         findings.append(Finding(
             claim_id=claim.id, text=claim.text, claim_type=claim.claim_type,
             metric=claim.metric, speaker_role=claim.speaker_role,
             hedging_score=claim.hedging_score, label=v.label, confidence=v.confidence,
-            severity=v.severity, refused=v.refused, rationale=v.rationale, sources=sources,
+            severity=v.severity, refused=v.refused, model=v.model, rationale=v.rationale,
+            sources=sources,
             uncited_numbers=uncited_numbers(v.rationale, shown, claim.text),
         ))
+    mode = ("online" if any(f.model for f in findings) else OFFLINE) if findings else None
+    warnings = []
+    if report.cost_usd is not None and report.cost_usd > COST_BUDGET_USD:
+        warnings.append(f"cost {report.cost_usd:.2f} USD is over the {COST_BUDGET_USD:.2f} USD "
+                        "budget (NFR-3)")
+    if report.latency_s is not None and report.latency_s > LATENCY_BUDGET_S:
+        warnings.append(f"latency {report.latency_s / 60:.1f} min is over the "
+                        f"{LATENCY_BUDGET_S // 60} min budget (NFR-1)")
     return ReportView(
         id=report.id, ticker=company.ticker, fiscal_year=report.fiscal_year,
         fiscal_period=report.fiscal_period, status=report.status,
         created_at=report.created_at, finished_at=report.finished_at,
-        latency_s=report.latency_s, cost_usd=report.cost_usd, error=report.error,
-        claims=findings,
+        latency_s=report.latency_s, cost_usd=report.cost_usd, error=report.error, mode=mode,
+        warnings=warnings, claims=findings,
     )
 
 
@@ -165,8 +185,11 @@ def to_markdown(view: ReportView) -> str:
         f"# {view.ticker} FY{view.fiscal_year} {view.fiscal_period}",
         "",
         (f"status `{view.status}` · claims `{len(view.claims)}` · "
-         f"latency `{view.latency_s}` s · cost `{view.cost_usd}` USD"),
+         f"latency `{view.latency_s}` s · cost `{view.cost_usd}` USD"
+         + (f" · `mode: {view.mode}`" if view.mode else "")),
     ]
+    if view.warnings:
+        lines += ["", *(f"- WARNING `{w}`" for w in view.warnings)]
     if view.error:
         lines += ["", f"error: `{view.error}`"]
     for rank, f in enumerate(view.claims, 1):
