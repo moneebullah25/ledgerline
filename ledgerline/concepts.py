@@ -45,7 +45,10 @@ CONCEPTS: dict[str, Concept] = {c.name: c for c in [
     Concept("operating_cash_flow", "USD", ("us-gaap:NetCashProvidedByUsedInOperatingActivities",),
             ("operating cash flow", "cash flow from operations", "cash from operations",
              "net cash provided by operating activities")),
-    Concept("capex", "USD", ("us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",),
+    Concept("capex", "USD", (
+        "us-gaap:PaymentsToAcquirePropertyPlantAndEquipment",
+        "us-gaap:PaymentsToAcquireProductiveAssets",
+    ),
             ("capital expenditures", "capex", "purchases of property and equipment")),
     Concept("cash", "USD", ("us-gaap:CashAndCashEquivalentsAtCarryingValue",),
             ("cash and cash equivalents",)),
