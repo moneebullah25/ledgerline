@@ -32,7 +32,10 @@ from ledgerline.store.xbrl_query import Fact, get_xbrl_fact
 
 REL_TOL = 0.005
 PP_TOL = 0.1
-_SCALES = (1.0, 1e3, 1e6, 1e9, 1e12, 0.01)
+_SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
+_MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
+_PCT = re.compile(
+    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?%|\s(?:percent|percentage points?|points?|pts)\b)")
 _TOKEN = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.(\d+))?")
 
 
@@ -48,13 +51,20 @@ def printed_half_ulp(text: str, value: float) -> float:
 
 
 def mentions_value(quote: str, claim: Claim) -> bool:
-    """Does `quote` print the claim's number (at any scale, within the claim's rounding)?"""
-    targets = [float(v) for v in (claim.value, claim.value_high) if v is not None]
-    for t in targets:
+    """Does `quote` print the claim's number, in the claim's unit, within its rounding?
+    Dollars must carry "$" (any scale for USD, none for per-share); percents must carry
+    "%", "percent" or "points": a bare "18" in "Rule 10b-18" is not "18%"."""
+    if claim.unit in ("USD", "USD/share"):
+        rx, scales = _MONEY, (_SCALES if claim.unit == "USD" else (1.0,))
+    elif claim.unit == "percent":
+        rx, scales = _PCT, (1.0,)
+    else:
+        rx, scales = _TOKEN, (1.0,)
+    for t in (float(v) for v in (claim.value, claim.value_high) if v is not None):
         tol = max(printed_half_ulp(claim.text, t), 1e-9 * abs(t))
-        for m in _TOKEN.finditer(quote):
-            n = float(m.group().replace(",", ""))
-            if any(abs(n * sc - t) <= tol or abs(n * sc + t) <= tol for sc in _SCALES):
+        for m in rx.finditer(quote):
+            n = float(m.group(1 if rx is not _TOKEN else 0).replace(",", ""))
+            if any(abs(n * sc - abs(t)) <= tol for sc in scales):
                 return True
     return False
 

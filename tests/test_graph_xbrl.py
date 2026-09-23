@@ -79,3 +79,8 @@ def test_mentions_value_any_scale():
     claim = C("revenue of $94.9 billion", 94.9e9)
     assert mentions_value("Total net sales were $94,930 million.", claim)
     assert not mentions_value("Total net sales were $97,000 million.", claim)
+    pct = C("revenue up 18% sequentially", 18.0, unit="percent", claim_type="comparison",
+            comparison="qoq")
+    assert mentions_value("Revenue increased 18% from the prior quarter.", pct)
+    assert not mentions_value("repurchases in compliance with Rule 10b-18.", pct)
+    assert not mentions_value("an unfavorable impact of 5.9 million units", pct)
