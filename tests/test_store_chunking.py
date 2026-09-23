@@ -37,8 +37,8 @@ def test_chunks_never_cross_sections_and_overlap_within_them():
 
 
 def test_cross_reference_is_not_a_header():
-    text = ("PART I\nItem 2. Results\nSee Part I,\nItem 1A of the 2025 Form 10-K for risks.\n"
-            "Net sales rose.\n")
+    text = ("PART I Financial Information\nItem 2. Results\nSee Part I,\n"
+            "Item 1A of the 2025 Form 10-K for risks.\nPart II of this report\nNet sales rose.\n")
     assert [p for _, p in _periodic_sections(text)] == ["Part I", "Part I > Item 2. Results"]
 
 
@@ -61,3 +61,38 @@ def test_toc_with_titles_on_next_line():
     assert [p for _, p in secs] == ["Part I", "Part I > Item 1. Financial Statements",
                                     "Part I > Item 2. MD&A"]
     assert secs[0][0] == text.index("PART I —")
+
+
+def test_out_of_order_toc_copies_are_dropped():
+    body = "Revenue rose because customers bought more of everything we sell. " * 3
+    text = ("Item 7. Management's Discussion and Analysis\nSee page 40 for the discussion of "
+            "results, liquidity and capital resources, and critical estimates.\n"
+            f"PART I\nItem 1. Business\n{body}\nPART II\nItem 7. Management's Discussion "
+            f"and Analysis\n{body}\n")
+    assert [p for _, p in _periodic_sections(text)] == [
+        "Part I", "Part I > Item 1. Business", "Part II",
+        "Part II > Item 7. Management's Discussion and Analysis"]
+
+
+def test_running_page_header_is_not_a_section():
+    text = ("PART I\nItem 1. Business\nWe sell things to customers worldwide.\n"
+            "PART I\nItem 1\nMore about the business on the next page.\n"
+            "Item 1A. Risk Factors\nThings can go wrong.\n")
+    assert [p for _, p in _periodic_sections(text)] == [
+        "Part I", "Part I > Item 1. Business", "Part I > Item 1A. Risk Factors"]
+
+
+def test_bare_item_with_title_out_of_reach_is_skipped():
+    # _next_line looks only 400 chars ahead; beyond that there is no title, so no header.
+    text = "PART I\nItem 2.\n" + " " * 500 + "Results\nSales grew.\n"
+    assert _periodic_sections(text) == []
+
+
+def test_filing_without_item_headers_falls_back_to_headings():
+    para = "Revenue grew in every segment this quarter, led by data center products. " * 4
+    text = (f"Intel Corporation\nForward-Looking Statements\n{para}\nResults of Operations\n"
+            f"{para}\n{'filler ' * 400}\nForm 10-Q Cross-Reference Index\n"
+            "Item 2. | Management's Discussion and Analysis | Pages 28 - 40\n")
+    paths = {c.section_path for c in chunk_document(text, "10-Q")}
+    assert {"Forward-Looking Statements", "Results of Operations"} <= paths
+    assert not any("Item 2." in p for p in paths)
