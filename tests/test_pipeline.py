@@ -2,6 +2,7 @@
 and exercised by their own tests); the database side is real."""
 
 import sys
+import time
 import types
 from datetime import date
 
@@ -27,7 +28,12 @@ class FakeResult(BaseModel):
     usages: list[tuple[str, Usage]]
 
 
-def _install_fakes(monkeypatch, *, fail_on: int | None = None) -> list[int]:
+class FakeIntegrityError(RuntimeError):
+    pass
+
+
+def _install_fakes(monkeypatch, *, fail_on: int | None = None,
+                   integrity_fail_on: int | None = None) -> list[int]:
     extracted: list[int] = []
 
     def extract_for_filing(s, filing_id):
@@ -50,8 +56,12 @@ def _install_fakes(monkeypatch, *, fail_on: int | None = None) -> list[int]:
         calls["n"] += 1
         if calls["n"] == fail_on:
             raise RuntimeError("graph exploded")
-        with tracer.span("xbrl_table"):
-            pass
+        with tracer.span("verify_claim", claim_id=claim.id):  # as graph.build does
+            with tracer.span("agent.xbrl_table") as a:
+                a["cost_usd"] = 0.005
+                time.sleep(0.002)
+            if calls["n"] == integrity_fail_on:
+                raise FakeIntegrityError("adjudicator output failed audit twice: [97.1]")
         fact = Citation(kind="xbrl_fact", ref_id=1, value=94.0e9, unit="USD")
         contradicted = claim.hedging_score == 0.0
         return FakeResult(
@@ -60,7 +70,8 @@ def _install_fakes(monkeypatch, *, fail_on: int | None = None) -> list[int]:
                 confidence=0.9 if contradicted else 0.5, rationale="See the filing.",
                 citations=[fact] if contradicted else []),
             evidence=[EvidenceItem(agent="xbrl_table", stance="contradicts",
-                                   summary="lower", citations=[fact])],
+                                   summary="lower", citations=[fact],
+                                   payload={"deviation": -0.25 if contradicted else 0.0})],
             critic=CriticOutput(counter_stance="supports", argument="Rounding?"),
             refused=False, prompt_version="p1", model="claude-opus-5", cost_usd=0.02,
             usages=[("xbrl_table", Usage("claude-sonnet-5", 1000, 100, 800, 0))],
@@ -71,6 +82,7 @@ def _install_fakes(monkeypatch, *, fail_on: int | None = None) -> list[int]:
         extract_for_call=lambda s, cid: 0))
     monkeypatch.setitem(sys.modules, "ledgerline.graph.build",
                         types.SimpleNamespace(verify_claim=verify_claim))
+    monkeypatch.setattr("ledgerline.graph.adjudicator.IntegrityError", FakeIntegrityError)
     return extracted
 
 
@@ -103,8 +115,10 @@ def test_run_report_extracts_verifies_and_ranks(db, monkeypatch):
     xbrl = next(e for e in ev if e.agent == "xbrl_table")
     assert (xbrl.model, xbrl.input_tokens, xbrl.cache_read_tokens) == ("claude-sonnet-5", 1000, 800)
     assert xbrl.trace_id == next(v.trace_id for v in verdicts if v.claim_id == xbrl.claim_id)
+    assert xbrl.latency_ms >= 2  # B4: read from the `agent.xbrl_table` span
     names = db.scalars(select(Span.name).where(Span.trace_id == verdicts[0].trace_id)).all()
-    assert sorted(names) == ["verify_claim", "xbrl_table"]
+    assert sorted(names) == ["agent.xbrl_table", "verify_claim"]  # one verify_claim span
+    assert "heartbeat_at" in r.config
 
     # A second run neither re-extracts nor re-verifies.
     run_report(db, r.id)
@@ -117,9 +131,10 @@ def test_failure_keeps_finished_claims_and_marks_failed(db, monkeypatch):
     _install_fakes(monkeypatch, fail_on=2)
     r = _report(db)
     run_report(db, r.id)
-    assert r.status == "failed" and "graph exploded" in r.error
+    assert r.status == "failed" and r.error == "RuntimeError: graph exploded"  # no traceback
     assert r.finished_at is not None
     assert len(db.scalars(select(Verdict).where(Verdict.report_id == r.id)).all()) == 1
+    assert r.cost_usd == pytest.approx(0.02)  # B5: the committed claim's spend survives
 
     # Resuming verifies only the claim that failed.
     _install_fakes(monkeypatch)
@@ -136,3 +151,49 @@ def test_quarter_without_sources_fails_with_reason(db, monkeypatch):
     db.flush()
     run_report(db, r.id)
     assert r.status == "failed" and "no claims for FY2025 Q1" in r.error
+
+
+@pytest.mark.db
+def test_integrity_failure_is_one_refused_claim_not_a_failed_report(db, monkeypatch):
+    _install_fakes(monkeypatch, integrity_fail_on=1)
+    r = _report(db)
+    run_report(db, r.id)
+    assert r.status == "done"
+    verdicts = db.scalars(select(Verdict).where(Verdict.report_id == r.id)
+                          .order_by(Verdict.claim_id)).all()
+    bad = verdicts[0]
+    assert (bad.label, bad.refused, bad.confidence, bad.citations) == ("unverifiable", True, 0, [])
+    assert "97.1" not in bad.rationale  # the failed text and its numbers are not shown
+    assert bad.cost_usd == pytest.approx(0.005)  # spend recorded on the finished agent span
+    assert r.cost_usd == pytest.approx(0.025)
+    names = db.scalars(select(Span.name).where(Span.trace_id == bad.trace_id)).all()
+    assert sorted(names) == ["agent.xbrl_table", "verify_claim"]
+
+
+def test_deviation_reads_the_agent_payload_magnitude():
+    from ledgerline.pipeline import _deviation
+
+    def res(**payload):
+        return types.SimpleNamespace(evidence=[
+            EvidenceItem(agent="xbrl_table", stance="contradicts", summary="x", payload=payload,
+                         citations=[Citation(kind="xbrl_fact", ref_id=1, value=1.0)])])
+    assert _deviation(res(deviation=-0.03)) == pytest.approx(0.03)
+    assert _deviation(res(relative_error=0.5)) is None  # the old key is not read
+
+
+@pytest.mark.db
+def test_fy_report_fails_with_reason(db, monkeypatch):
+    _install_fakes(monkeypatch)
+    r = _report(db)
+    r.fiscal_period = "FY"
+    db.flush()
+    run_report(db, r.id)
+    assert r.status == "failed" and "request Q4" in r.error
+
+
+def test_cli_rejects_fy(capsys):
+    from ledgerline.pipeline import main
+
+    with pytest.raises(SystemExit) as e:
+        main(["--ticker", "AAPL", "--fy", "2025", "--fp", "FY"])
+    assert e.value.code == 2 and "request Q4" in capsys.readouterr().err

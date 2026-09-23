@@ -33,3 +33,20 @@ def test_claim_next_takes_oldest_queued_and_sweep_recovers_stale(db):
     assert poison.status == "failed" and "stale" in poison.error
     assert claim_next(db) == dead.id  # re-queued work keeps its place: created before second
     assert dead.config["attempts"] == 2
+
+
+@pytest.mark.db
+def test_sweep_spares_a_long_report_with_a_fresh_heartbeat(db):
+    co = Company(cik="0000021344", ticker="KO", name="Coca-Cola")
+    db.add(co)
+    db.flush()
+    old = (datetime.now(UTC) - STALE_AFTER - timedelta(minutes=1)).isoformat()
+    live = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q1", status="running",
+                  config={"started_at": old, "heartbeat_at": datetime.now(UTC).isoformat(),
+                          "attempts": 1})
+    stuck = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q2", status="running",
+                   config={"started_at": old, "heartbeat_at": old, "attempts": 1})
+    db.add_all([live, stuck])
+    db.flush()
+    assert sweep_stale(db) == 1
+    assert (live.status, stuck.status) == ("running", "queued")

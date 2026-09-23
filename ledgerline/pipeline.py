@@ -5,24 +5,32 @@
 Transactions: one commit per claim. A claim's evidence, verdict and trace spans land
 together or not at all, and a crash keeps every claim finished before it. A re-run of the
 same report skips claims that already have a verdict, so the worker can safely re-queue a
-report whose process died (see worker.py).
+report whose process died (see worker.py). Each claim commit also refreshes
+report.config["heartbeat_at"], which is what the worker's stale sweep watches.
+
+A claim whose verdict fails the citation-integrity check (FR-45) is stored as a refused
+`unverifiable` verdict and the report goes on; any other error fails the report.
 """
 
 import argparse
+import logging
 import sys
 import time
-import traceback
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
 from ledgerline.llm import Usage
 from ledgerline.models import CallAudio, Claim, Company, Evidence, Filing, Report, Segment, Verdict
 from ledgerline.report.severity import load_weights, severity
-from ledgerline.tracing import Tracer
+from ledgerline.tracing import Tracer, error_summary
+
+log = logging.getLogger("ledgerline.pipeline")
+FY_UNSUPPORTED = ("FY reports are not supported: the full year is covered by the fourth-quarter "
+                  "earnings release, so request Q4")
 
 
 def _ensure_claims(s: Session, report: Report) -> list[Claim]:
@@ -59,19 +67,12 @@ def _ensure_claims(s: Session, report: Report) -> list[Claim]:
     ).order_by(Claim.id)))
 
 
-def _deviation(claim: Claim, result) -> float | None:
-    """Relative error from the XBRL agent: its payload value if it computed one, else from
-    the claim's number and the first fact value it cited."""
+def _deviation(result) -> float | None:
+    """The XBRL agent's payload["deviation"] (signed; severity wants the magnitude)."""
     for e in result.evidence:
-        if e.agent != "xbrl_table" or e.stance == "insufficient":
-            continue
-        if (rel := e.payload.get("relative_error")) is not None:
-            return float(rel)
-        if claim.value is not None:
-            for c in e.citations:
-                # Same unit only: a margin claim may cite its USD component facts.
-                if c.kind == "xbrl_fact" and c.value and c.unit in (None, claim.unit):
-                    return abs(float(claim.value) - c.value) / abs(c.value)
+        if (e.agent == "xbrl_table" and e.stance != "insufficient"
+                and (d := e.payload.get("deviation")) is not None):
+            return abs(float(d))
     return None
 
 
@@ -86,6 +87,7 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
     usage: dict[str, list[Usage]] = defaultdict(list)
     for name, u in result.usages:
         usage[name].append(u)
+    # Agents trace as `agent.<name>`; the critic's span is plain `critic`.
     latency = {sp.name: sp.attrs.get("latency_ms", 0) for sp in tracer.spans}
 
     def row(agent: str, stance: str, summary: str, citations: list, payload: dict) -> Evidence:
@@ -97,7 +99,8 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
             input_tokens=sum(u.input_tokens for u in us),
             output_tokens=sum(u.output_tokens for u in us),
             cache_read_tokens=sum(u.cache_read_tokens for u in us),
-            cost_usd=sum(u.cost_usd for u in us), latency_ms=latency.get(agent, 0),
+            cost_usd=sum(u.cost_usd for u in us),
+            latency_ms=latency.get(f"agent.{agent}", latency.get(agent, 0)),
             trace_id=tracer.trace_id,
         )
 
@@ -113,12 +116,40 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
     s.add(Verdict(
         report_id=report.id, claim_id=claim.id, label=v.label, confidence=v.confidence,
         rationale=v.rationale, citations=[c.model_dump() for c in v.citations],
-        severity=severity(v.label, v.confidence, _deviation(claim, result), claim.hedging_score,
+        severity=severity(v.label, v.confidence, _deviation(result), claim.hedging_score,
                           _abnormal_return(result), load_weights()),
         refused=result.refused, prompt_version=result.prompt_version, model=result.model,
         cost_usd=result.cost_usd, trace_id=tracer.trace_id,
     ))
     tracer.flush(s)
+
+
+def _persist_integrity_failure(s: Session, report: Report, claim: Claim, tracer: Tracer,
+                               prompt_version: str, err: Exception) -> None:
+    """FR-45 held: no verdict text that failed the audit is stored or shown. The spend is:
+    what the finished nodes recorded on their spans, plus the failed call's usage if the
+    error carries one (the verify_claim span only gets a total on success)."""
+    usage = getattr(err, "usage", None)
+    cost = sum(sp.attrs.get("cost_usd", 0.0) for sp in tracer.spans if sp.name != "verify_claim")
+    cost += usage.cost_usd if usage is not None else 0.0
+    s.add(Verdict(
+        report_id=report.id, claim_id=claim.id, label="unverifiable", confidence=0.0,
+        rationale="No verdict: the generated rationale failed the citation-integrity check.",
+        citations=[], severity=0.0, refused=True, prompt_version=prompt_version, model=None,
+        cost_usd=cost, trace_id=tracer.trace_id,
+    ))
+    tracer.flush(s)
+
+
+def _heartbeat(report: Report) -> None:
+    report.config = {**report.config, "heartbeat_at": datetime.now(UTC).isoformat()}
+
+
+def _total_cost(s: Session, report_id: uuid.UUID) -> float:
+    # Verdict.cost_usd is the claim's whole spend (agents, critic, adjudicator), so it is
+    # recomputed from committed rows rather than accumulated in memory a crash would lose.
+    return s.scalar(select(func.coalesce(func.sum(Verdict.cost_usd), 0.0))
+                    .where(Verdict.report_id == report_id))
 
 
 def run_report(s: Session, report_id: uuid.UUID) -> None:
@@ -129,15 +160,19 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
         raise ValueError(f"no report {report_id}")
     t0 = time.perf_counter()
     report.status = "running"
-    report.config = {**report.config, "started_at": datetime.now(UTC).isoformat()}
+    now = datetime.now(UTC).isoformat()
+    report.config = {**report.config, "started_at": now, "heartbeat_at": now}
     s.commit()
-    cost = 0.0
     try:
-        from ledgerline.graph.build import (
-            verify_claim,  # inside try: a broken import fails the report
-        )
+        # Inside try: a broken import fails the report.
+        from ledgerline.graph import load_prompt
+        from ledgerline.graph.adjudicator import IntegrityError as CitationIntegrityError
+        from ledgerline.graph.build import verify_claim
 
+        if report.fiscal_period == "FY":
+            raise ValueError(FY_UNSUPPORTED)
         claims = _ensure_claims(s, report)
+        _heartbeat(report)
         s.commit()
         if not claims:
             raise LookupError(
@@ -148,17 +183,23 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
             if claim.id in done:
                 continue
             tracer = Tracer()
-            with tracer.span("verify_claim", claim_id=claim.id, report_id=str(report_id)):
+            try:
                 result = verify_claim(s, claim, tracer)
-            _persist(s, report, claim, result, tracer)
+            except CitationIntegrityError as e:
+                log.exception("report %s claim %s: citation-integrity failure", report_id,
+                              claim.id)
+                _persist_integrity_failure(s, report, claim, tracer,
+                                           load_prompt("adjudicator")[1], e)
+            else:
+                _persist(s, report, claim, result, tracer)
+            _heartbeat(report)
             s.commit()
-            cost += result.cost_usd
         report.status, report.error = "done", None
-    except Exception:  # noqa: BLE001 - any failure must end as status='failed', not 'running'
+    except Exception as e:  # any failure must end as status='failed', not 'running'
+        log.exception("report %s failed", report_id)  # the traceback stays server-side
         s.rollback()  # drops only the claim in flight; earlier claims are committed
-        report.status, report.error = "failed", traceback.format_exc()[-4000:]  # tail keeps the error
-    # Cost of this attempt; a resumed report adds to what the earlier attempt spent.
-    report.cost_usd = (report.cost_usd or 0.0) + cost
+        report.status, report.error = "failed", error_summary(e)
+    report.cost_usd = _total_cost(s, report_id)
     report.latency_s = round(time.perf_counter() - t0, 3)
     report.finished_at = datetime.now(UTC)
     s.commit()
@@ -173,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--fy", type=int, required=True)
     p.add_argument("--fp", required=True, choices=["Q1", "Q2", "Q3", "Q4", "FY"])
     a = p.parse_args(argv)
+    if a.fp == "FY":
+        p.error(FY_UNSUPPORTED)
     with Session(engine(), expire_on_commit=False) as s:
         company = s.scalar(select(Company).where(Company.ticker == a.ticker.upper()))
         if company is None:

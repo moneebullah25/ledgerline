@@ -12,6 +12,12 @@ from sqlalchemy.orm import Session
 from ledgerline.models import Span
 
 
+def error_summary(e: BaseException, limit: int = 300) -> str:
+    """Class and a bounded message: what an API reader may see. Tracebacks go to the log."""
+    msg = " ".join(str(e).split())
+    return f"{type(e).__name__}: {msg[:limit]}" if msg else type(e).__name__
+
+
 class Tracer:
     def __init__(self, trace_id: uuid.UUID | None = None):
         self.trace_id = trace_id or uuid.uuid4()
@@ -29,7 +35,7 @@ class Tracer:
         try:
             yield attrs
         except Exception as e:
-            attrs["error"] = f"{type(e).__name__}: {e}"
+            attrs["error"] = error_summary(e)
             raise
         finally:
             self._stack.pop()
