@@ -59,6 +59,13 @@ def test_numeric_claim_needs_the_number_in_the_quote():
     assert filing_rag.assess(other, [HIT], fake_scores("")).stance == "insufficient"
 
 
+def test_offline_nli_never_contradicts():
+    claim = C(text="Services grew strongly", claim_type="qualitative")
+    contra = lambda pairs: np.array([[0.99, 0.005, 0.005]] * len(pairs))
+    ev = filing_rag.assess(claim, [HIT], contra)
+    assert ev.stance == "insufficient" and ev.payload["p_contra"] == pytest.approx(0.99)
+
+
 def test_qualitative_claim_supported_by_nli():
     claim = C(text="Services grew strongly", claim_type="qualitative")
     ev = filing_rag.assess(claim, [HIT], fake_scores("Services"))
