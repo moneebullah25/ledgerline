@@ -15,11 +15,11 @@ SPK = ["spk0", "spk1", "spk1", "spk0", "spk2", "spk1"]
 
 
 def test_seeds_this_and_next_speaker():
-    votes = seed_roles(CALL)
-    assert votes[0] == ["operator"]
-    assert "executive" in votes[2]  # "turn the call over to" seeds the next turn + "we reported"
-    assert votes[3] == ["operator"]
-    assert votes[4] == ["analyst", "analyst"]  # seeded by operator intro and by its own cue
+    own, prev = seed_roles(CALL)
+    assert own[0] == ["operator"]
+    assert prev[2] == ["executive"] and own[2] == ["executive"]  # handed over + "we reported"
+    assert own[3] == ["operator"]
+    assert own[4] == ["analyst"] and prev[4] == ["analyst"]
 
 
 def test_majority_vote_per_cluster():
@@ -29,8 +29,17 @@ def test_majority_vote_per_cluster():
     assert assign_roles(["Hello there."], ["spk9"]) == ["unknown"]
 
 
+def test_own_cue_beats_cluster_and_one_stray_turn_cannot_flip_it():
+    texts = ["Good afternoon. My colleagues and I decided. I look forward to your questions.",
+             "Michael McKee with Bloomberg. What would it take?",
+             "Well, it depends.", "Steve.", "Your other question was?"]
+    # A reporter and a next-speaker cue landed in the chair's cluster "a".
+    assert assign_roles(texts, ["a", "a", "a", "b", "a"]) == [
+        "executive", "analyst", "executive", "operator", "executive"]
+
+
 def test_handing_back_to_operator_does_not_seed_executive():
-    assert seed_roles(["I'll turn it back over to the operator.", "Next caller."])[1] == []
+    assert seed_roles(["I'll turn it back over to the operator.", "Next caller."])[1][1] == []
 
 
 def test_section_split_skips_early_qa_mention():
@@ -42,7 +51,7 @@ def test_section_split_skips_early_qa_mention():
 def test_fomc_split_and_roles():
     texts = ["Good afternoon. My colleagues and I remain focused. I look forward to your questions.",
              "Steve.", "Steve Liesman, CNBC. Thank you, Mr. Chairman.", "So, a lot in there."]
-    assert seed_roles(["Howard Schneider with Reuters. How close was it?"]) == [["analyst"]]
+    assert seed_roles(["Howard Schneider with Reuters. How close was it?"])[0] == [["analyst"]]
     assert sections(texts) == ["prepared_remarks", "qa", "qa", "qa"]
     assert assign_roles(texts, ["a", "b", "c", "a"]) == ["executive", "operator", "analyst",
                                                          "executive"]

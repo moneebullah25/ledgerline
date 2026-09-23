@@ -20,9 +20,10 @@ _SEEDS: list[tuple[re.Pattern, str | None, str | None]] = [
     # says nothing about the next speaker.
     (re.compile(r"\bturn (the call |it |things )?(back )?over to (?!(the )?operator)", _I),
      None, "executive"),
-    (re.compile(r"\blook forward to (your|taking your) questions|\bmy colleagues and I\b"
-                r"|\bwe (reported|delivered|generated|achieved)\b", _I),
-     "executive", None),
+    # Separate cues so a statement that has several counts as several votes.
+    (re.compile(r"\blook forward to (your|taking your) questions", _I), "executive", None),
+    (re.compile(r"\bmy colleagues and I\b", _I), "executive", None),
+    (re.compile(r"\bwe (reported|delivered|generated|achieved)\b", _I), "executive", None),
     (re.compile(r"\bthanks? (you )?for taking (my|our|the) questions?"
                 r"|\b(thank you|thanks),? (mr\.? chair(man)?|madam chair|chair \w+)\b", _I),
      "analyst", None),
@@ -44,29 +45,32 @@ _QA = re.compile(
     r"|\blook forward to (your|taking your) questions", _I)
 
 
-def seed_roles(texts: list[str]) -> list[list[str]]:
-    """Role votes per turn: votes[i] are the cues that say who turn i's speaker is."""
-    votes: list[list[str]] = [[] for _ in texts]
+def seed_roles(texts: list[str]) -> tuple[list[list[str]], list[list[str]]]:
+    """(own, prev) role votes per turn: own[i] come from what turn i itself says, prev[i]
+    from the turn before it ("our next question comes from ...")."""
+    own: list[list[str]] = [[] for _ in texts]
+    prev: list[list[str]] = [[] for _ in texts]
     for i, text in enumerate(texts):
         for cue, this, nxt in _SEEDS:
             if cue.search(text):
                 if this:
-                    votes[i].append(this)
+                    own[i].append(this)
                 if nxt and i + 1 < len(texts):
-                    votes[i + 1].append(nxt)
-    return votes
+                    prev[i + 1].append(nxt)
+    return own, prev
 
 
 def assign_roles(texts: list[str], speakers: list[str]) -> list[str]:
-    """Majority vote of seeds per speaker cluster; an unseeded cluster falls back to the
-    turn's own seed, else unknown."""
-    votes = seed_roles(texts)
+    """A turn's own cues decide its role. Otherwise the speaker cluster's majority vote
+    decides, own cues counting double: a next-speaker cue is only as good as the turn
+    boundaries, and one reporter merged into the chair's cluster must not relabel it."""
+    own, prev = seed_roles(texts)
     by_speaker: dict[str, Counter] = {}
-    for spk, v in zip(speakers, votes, strict=True):
-        by_speaker.setdefault(spk, Counter()).update(v)
+    for spk, o, p in zip(speakers, own, prev, strict=True):
+        by_speaker.setdefault(spk, Counter()).update(o + o + p)
     out = []
-    for spk, v in zip(speakers, votes, strict=True):
-        c = by_speaker[spk] or Counter(v)
+    for spk, o, p in zip(speakers, own, prev, strict=True):
+        c = Counter(o) or by_speaker[spk] or Counter(p)
         out.append(c.most_common(1)[0][0] if c else "unknown")
     return out
 
