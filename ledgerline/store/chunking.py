@@ -18,7 +18,7 @@ _TOKEN = re.compile(r"\w+|[^\w\s]")
 
 _PART = re.compile(r"^[ \t]*PART[ \t]+(IV|III|II|I)\b[ \t]*(?:[—–:.\-][^\n]*)?$", re.I | re.M)
 # "Item 2. Title", "ITEM 1A — Title", or a bare "Item 2." with the title on the next line.
-_ITEM = re.compile(r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?[ \t]*([^\n]*)$", re.I | re.M)
+_ITEM = re.compile(r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?([^\n]*)$", re.I | re.M)
 _MAX_HEADER_LINE = 200
 
 # 8-K press releases have no Item structure: a heading is a short, unpunctuated line directly
@@ -64,7 +64,10 @@ def _periodic_sections(text: str) -> list[tuple[int, str]]:
     for m in _ITEM.finditer(text):
         if len(m.group(0)) > _MAX_HEADER_LINE:
             continue
-        title = m.group(2).strip() or _next_line(text, m.end())
+        # Headers laid out as table rows render as "Item 2. | Title | 13" (load_text joins
+        # cells with " | "); the first non-empty cell after the number is the title.
+        title = next((c.strip() for c in m.group(2).split("|") if c.strip()), "")
+        title = title or _next_line(text, m.end())
         # Real headers are title-cased; "Item 1A of the 2025 Form 10-K" is a cross-reference.
         if not title[:1].isupper() or len(title) > _MAX_HEADER_LINE or _ITEM.match(title):
             continue

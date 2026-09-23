@@ -51,3 +51,13 @@ def test_press_release_headings_and_run_on_split():
         "Company reports results", "CONDENSED CONSOLIDATED BALANCE SHEETS"}
     assert all(c.token_count <= 800 for c in chunks)
     assert all(text[c.char_start:c.char_end] == c.text for c in chunks)
+
+
+def test_toc_with_titles_on_next_line():
+    text = ("TABLE OF CONTENTS\nPart I\nItem 1.\nFinancial Statements\n1\nItem 2.\nMD&A\n9\n"
+            "PART I — FINANCIAL INFORMATION\nItem 1. Financial Statements\nSales | 5\n"
+            "Item 2.\nMD&A\nSales grew.\n")
+    secs = _periodic_sections(text)
+    assert [p for _, p in secs] == ["Part I", "Part I > Item 1. Financial Statements",
+                                    "Part I > Item 2. MD&A"]
+    assert secs[0][0] == text.index("PART I —")
