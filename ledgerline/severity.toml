@@ -1,0 +1,21 @@
+# §10.7 severity weights. Edit and re-run a report to change the ranking; no code change.
+#
+# severity = label[verdict] * ( confidence
+#                              + deviation * min(|relative error|, deviation_cap)
+#                              + unhedged  * (1 - hedging_score)
+#                              + abnormal_return * min(|abnormal return|, abnormal_return_cap) )
+#
+# The label weight multiplies the whole sum so a supported claim always scores 0: a
+# confidently stated, correct number is not a finding.
+
+[label]
+contradicted = 1.0
+unverifiable = 0.25
+supported = 0.0
+
+[weights]
+deviation = 2.0            # per unit of relative error (0.10 = 10% off)
+deviation_cap = 0.5        # a 50% miss is already as bad as it gets for ranking
+unhedged = 0.5             # "we delivered $X" is worse than "roughly $X" when wrong
+abnormal_return = 5.0      # per unit of |abnormal return| (0.04 = 4%)
+abnormal_return_cap = 0.2
