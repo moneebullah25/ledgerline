@@ -1,6 +1,7 @@
 """python -m ledgerline.store index --all | index --filing ID | explain"""
 
 import argparse
+import re
 import time
 
 from sqlalchemy import text
@@ -11,19 +12,29 @@ from ledgerline.store.index import index_filing, unindexed_filing_ids
 
 # Unfiltered top-50 nearest neighbours: the query shape hnsw serves directly.
 _DENSE = "SELECT id FROM chunk ORDER BY embedding <=> CAST(:q AS vector) LIMIT 50"
+# The dense leg as search() runs it: company filter through the filing join.
+_FILTERED = """SELECT c.id FROM chunk c JOIN filing f ON f.id = c.filing_id
+    WHERE f.company_id = (SELECT min(id) FROM company) AND c.embedding IS NOT NULL
+    ORDER BY c.embedding <=> CAST(:q AS vector) LIMIT 50"""
 
 
 def explain(query: str = "total net sales for the quarter") -> None:
-    """EXPLAIN ANALYZE the dense leg with the hnsw index vs a forced sequential scan."""
+    """EXPLAIN ANALYZE the dense leg: hnsw vs a forced sequential scan, then the filtered
+    production query. Each is run twice and the second (warm cache) plan is printed."""
     q = str(list(map(float, embed.embed_query(query))))
-    with session() as s:
-        for label, setup in (("hnsw", "SET LOCAL enable_seqscan = on"),
-                             ("seqscan", "SET LOCAL enable_indexscan = off")):
-            s.execute(text(setup))
-            for _ in range(2):  # first run warms the buffer cache; report the second
-                plan = [r[0] for r in s.execute(text("EXPLAIN ANALYZE " + _DENSE), {"q": q})]
-            print(f"--- {label}\n" + "\n".join(plan))
-            s.execute(text("RESET enable_indexscan"))
+    runs = [
+        ("hnsw, unfiltered", _DENSE, ["SET LOCAL hnsw.ef_search = 100"]),
+        ("seqscan, unfiltered", _DENSE, ["SET LOCAL enable_indexscan = off"]),
+        ("search() dense leg, company filter", _FILTERED,
+         ["SET LOCAL hnsw.ef_search = 100", "SET LOCAL hnsw.iterative_scan = strict_order"]),
+    ]
+    for label, sql, setup in runs:
+        with session() as s:  # SET LOCAL ends with the transaction
+            for stmt in setup:
+                s.execute(text(stmt))
+            for _ in range(2):
+                plan = [r[0] for r in s.execute(text("EXPLAIN ANALYZE " + sql), {"q": q})]
+        print(f"--- {label}\n" + "\n".join(re.sub(r"'\[[^']*\]'", "'[...]'", ln) for ln in plan))
 
 
 def main() -> None:

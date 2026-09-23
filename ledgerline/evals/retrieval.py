@@ -5,7 +5,8 @@ Method (by construction, not hand labels):
   gives the reported value. The query is a natural question about that metric and period;
   phrasings rotate and a third of them avoid the concept's usual words. A chunk is relevant
   iff it belongs to that company's 10-Q/10-K for that period AND prints the value the way
-  filings do (millions or thousands with separators, "94.9 billion", EPS to 2 decimals).
+  filings do (millions or thousands with separators, "94.9 billion", EPS to 2 decimals)
+  on the same line as the metric's label (a table row or a paragraph, see LABELS).
   Triples with no relevant chunk are dropped (the value is not printed as a 3-month or
   annual figure, e.g. year-to-date cash flow in a Q2/Q3 10-Q). Sampling is stratified:
   round-robin over companies, concepts interleaved within a company, fixed seed.
@@ -70,14 +71,84 @@ PHRASES: dict[str, list[str]] = {
               "spending on facilities and equipment"],
     "cash": ["cash and cash equivalents", "cash balance", "money on hand at period end"],
 }
+# A chunk only counts if the value sits on the same line as the metric's label: load_text
+# keeps a table row ("Research and development | 3,368 | 3,684") or a paragraph on one line.
+# Without this, a 3-digit figure like 682 also "matches" an unrelated line elsewhere.
+LABELS: dict[str, re.Pattern] = {k: re.compile(v, re.IGNORECASE) for k, v in {
+    "revenue": r"revenue|sales",
+    "net_income": r"net (income|earnings)|net (loss|profit)",
+    "operating_income": r"operating (income|profit|loss)|income from operations",
+    "gross_profit": r"gross (profit|margin)",
+    "cost_of_revenue": r"cost of|costs of",
+    "rd_expense": r"research",
+    "sga_expense": r"selling|general and administrative|general & administrative",
+    "eps_diluted": r"diluted|per share",
+    "operating_cash_flow": r"operating activities|operations",
+    "capex": r"property|capital (expenditure|spending)|equipment",
+    "cash": r"cash",
+}.items()}
 TEMPLATES = [
     "What was {co}'s {phrase} for the {period}?",
     "How much {phrase} did {co} report for the {period}?",
     "{co} {phrase} {period}",
 ]
 
-# (ticker, query, SQL predicate over chunk c / filing f) — hand-judged, see module docstring.
-QUALITATIVE: list[tuple[str, str, str]] = []
+# (ticker, query, SQL predicate over chunk c / filing f). Single annotator: each predicate
+# was written, then every chunk it matched was read and judged to answer the query
+# (2026-09-23). Predicates are pinned to one filing so they stay stable across re-indexing.
+def _in(form: str, fy: int, fp: str | None = None) -> str:
+    return (f"f.form_type = '{form}' AND f.fiscal_year = {fy}"
+            + (f" AND f.fiscal_period = '{fp}'" if fp else ""))
+
+
+QUALITATIVE: list[tuple[str, str, str]] = [
+    ("AAPL", "How did tariffs affect Apple's gross margin in the June 2026 quarter?",
+     _in("10-Q", 2026, "Q3") + " AND c.text ~* 'tariff' AND c.text ~* 'gross margin'"),
+    ("AAPL", "How many shares did Apple buy back in the June 2026 quarter and at what price?",
+     _in("10-Q", 2026, "Q3") + " AND c.section_path LIKE 'Part II > Item 2.%'"),
+    ("AAPL", "What is the Epic Games lawsuit against Apple about?",
+     _in("10-K", 2025) + " AND c.text ~* 'Epic Games, Inc. filed'"),
+    ("MSFT", "What drove Microsoft's Intelligent Cloud revenue growth in fiscal 2026?",
+     _in("10-K", 2026) + " AND c.text ~* 'Intelligent Cloud revenue increased'"),
+    ("MSFT", "What is Microsoft's partnership with OpenAI?",
+     _in("10-Q", 2026, "Q3") + " AND c.text ~* 'strategic partnership with OpenAI'"
+     " AND c.section_path NOT LIKE '%RISK FACTORS%'"),
+    ("NVDA", "How do US export controls on China affect NVIDIA's business?",
+     _in("10-Q", 2027, "Q2") + " AND c.text ~* 'export control' AND c.text ~* 'China'"),
+    ("NVDA", "How concentrated is NVIDIA's revenue among its largest direct customers?",
+     _in("10-K", 2026) + " AND c.text ~* 'direct customer' AND c.text ~* 'total revenue'"),
+    ("META", "How much does Meta plan to spend on capital expenditures in 2026?",
+     _in("10-Q", 2026, "Q2") + " AND c.text ~* 'anticipate making capital expenditures'"),
+    ("AMZN", "How fast did AWS sales grow in the second quarter of 2026?",
+     _in("10-Q", 2026, "Q2") + " AND c.text ~* 'AWS sales increased'"),
+    ("AMZN", "Is Amazon's business seasonal?",
+     _in("10-K", 2025) + " AND c.text ~* 'affected by seasonality'"
+     " AND c.section_path LIKE '%Item 1. Business%'"),
+    ("GOOGL", "What antitrust lawsuits has the Department of Justice brought against Google?",
+     _in("10-Q", 2026, "Q2") + " AND c.text ~* 'Antitrust Matters|Department of Justice'"),
+    ("INTC", "What severance charges and savings came from Intel's 2025 restructuring plan?",
+     _in("10-Q", 2026, "Q2") + " AND c.text ~* 'Employee severance|headcount reductions "
+     "taken under the 2025 Restructuring Plan'"),
+    ("ADBE", "How does Adobe see competition from AI affecting its business?",
+     _in("10-Q", 2026, "Q3")
+     + " AND c.text ~* 'more competition as AI|intensely competitive markets'"),
+    ("CSCO", "How large are Cisco's remaining performance obligations?",
+     _in("10-K", 2026) + " AND c.text ~* 'remaining performance obligations'"),
+    ("KO", "How did foreign currency fluctuations affect Coca-Cola's net operating revenues?",
+     _in("10-Q", 2026, "Q2") + " AND c.text ~* 'Foreign Currency Fluctuations \\|'"
+     " AND c.text ~* 'Consolidated \\| '"),
+    ("PEP", "What is PepsiCo's 2019 Multi-Year Productivity Plan and what has it cost?",
+     _in("10-Q", 2026, "Q2")
+     + " AND c.text ~* 'productivity plan' AND c.section_path NOT LIKE '%Item 4.%'"),
+    ("MCD", "What share of McDonald's restaurants are franchised?",
+     _in("10-K", 2025) + " AND c.text ~* '95%[^.]{0,50}franchised'"),
+    ("NKE", "Why did NIKE's gross margin change in fiscal 2026?",
+     _in("10-K", 2026) + " AND c.text ~* 'gross margin (decreased|increased|contracted|expanded)'"),
+    ("HD", "When did Home Depot acquire GMS and what did it pay?",
+     _in("10-K", 2025) + " AND c.text ~* 'completed the (GMS )?acquisition|acquisition of GMS'"),
+    ("PG", "For how many consecutive years has Procter & Gamble raised its dividend?",
+     _in("10-K", 2026) + " AND c.text ~* 'consecutive year'"),
+]
 
 
 @dataclass
@@ -141,7 +212,9 @@ def constructed_queries(s: Session, n: int = N_CONSTRUCTED, seed: int = SEED) ->
             if fact is None:
                 continue
             pat = _value_pattern(renderings(fact.value, fact.unit))
-            relevant = {cid for cid, t in chunks[f.id] if pat.search(t)}
+            label = LABELS[concept]
+            relevant = {cid for cid, t in chunks[f.id]
+                        if any(pat.search(ln) and label.search(ln) for ln in t.split("\n"))}
             if not relevant:
                 continue
             by_company[f.company_id][concept].append(Query(
