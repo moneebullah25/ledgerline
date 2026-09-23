@@ -1,0 +1,36 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ledgerline
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ledgerline
+    ports: ["5433:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerline"]
+      interval: 2s
+      retries: 30
+
+  api:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn ledgerline.api.main:app --host 0.0.0.0 --port 8000"
+    env_file: .env
+    environment:
+      LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD}@db:5432/ledgerline
+    ports: ["8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  worker:
+    build: {context: ., args: {EXTRAS: ml}}
+    command: python -m ledgerline.worker
+    env_file: .env
+    environment:
+      LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD}@db:5432/ledgerline
+    volumes: [./data:/app/data]
+    depends_on:
+      db: {condition: service_healthy}
+
+volumes:
+  pgdata:

@@ -1,0 +1,61 @@
+[project]
+name = "ledgerline"
+version = "1.0.0"
+description = "Verify what management says on earnings calls against what the company filed."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3.6",
+    "httpx>=0.28",
+    "tenacity>=9.0",
+    "prefect>=3.1",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.3",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "anthropic>=0.40",
+    "langgraph>=0.2.60",
+]
+
+[project.optional-dependencies]
+# Model-backed components. Kept optional so the API container and CI stay small;
+# the worker image installs them.
+ml = [
+    "sentence-transformers>=3.3",
+    "gliner>=0.2.13",
+    "faster-whisper>=1.1",
+    "statsforecast>=2.0",
+    "chronos-forecasting>=1.4",
+    "jiwer>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "python-dotenv>=1.2.3",
+    "respx>=0.21",
+    "ruff>=0.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "db: needs a live Postgres+pgvector (LEDGERLINE_DATABASE_URL)",
+    "ml: needs the [ml] extra and model downloads",
+    "network: hits a real external API",
+]
+addopts = "-m 'not network'"
+
+[tool.ruff]
+line-length = 100
