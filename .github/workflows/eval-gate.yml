@@ -1,0 +1,44 @@
+# §12: a PR touching retrieval, extraction or the verification graph is blocked if L2
+# contradiction precision drops more than 2 points (absolute) below main's baseline.
+name: eval-gate
+on:
+  pull_request:
+    paths:
+      - "ledgerline/graph/**"
+      - "ledgerline/extract/**"
+      - "ledgerline/store/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  l2:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env: {POSTGRES_USER: ledgerline, POSTGRES_PASSWORD: ledgerline, POSTGRES_DB: ledgerline}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerline" --health-interval 2s --health-retries 30
+    env:
+      LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:ledgerline@localhost:5432/ledgerline
+      LEDGERLINE_SEC_USER_AGENT: Ledgerline CI ci@example.com
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: astral-sh/setup-uv@v6
+        with: {enable-cache: true}
+      - run: uv sync --frozen --extra ml
+      - run: uv run alembic upgrade head
+      # Compare against the baseline on the base branch, so a PR cannot lower its own bar.
+      - run: git show "origin/${{ github.base_ref }}:ledgerline/evals/baseline.json" > "$RUNNER_TEMP/baseline.json"
+      - id: gate
+        run: uv run python -m ledgerline.evals.gate --baseline "$RUNNER_TEMP/baseline.json" --out eval-gate.md
+      - name: Post per-claim verdict diff
+        if: always() && hashFiles('eval-gate.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file eval-gate.md --edit-last --create-if-none

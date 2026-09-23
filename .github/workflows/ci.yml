@@ -1,0 +1,40 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {enable-cache: true}
+      - run: uv sync --frozen   # no [ml] extra: model-backed tests are marked `ml`
+      - run: uv run ruff check .
+      - run: uv run pytest -m "not db and not ml and not network"
+        env:
+          LEDGERLINE_DATABASE_URL: postgresql+psycopg://unused@localhost/unused
+
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ledgerline
+          POSTGRES_PASSWORD: ledgerline   # throwaway CI database, not a secret
+          POSTGRES_DB: ledgerline
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerline" --health-interval 2s --health-retries 30
+    env:
+      LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:ledgerline@localhost:5432/ledgerline
+      LEDGERLINE_SEC_USER_AGENT: Ledgerline CI ci@example.com
+      LEDGERLINE_LLM_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with: {enable-cache: true}
+      - run: uv sync --frozen
+      - run: uv run pytest -m "db and not ml and not network"

@@ -1,0 +1,5 @@
+{
+  "metrics": {"contradiction_precision": null},
+  "per_claim": {},
+  "note": "No L2 run recorded yet. Populate with `python -m ledgerline.evals.gate --write-baseline` on main."
+}
