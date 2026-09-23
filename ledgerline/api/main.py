@@ -3,22 +3,33 @@
 Endpoints are plain `def`: SQLAlchemy here is synchronous, and FastAPI runs `def` endpoints
 in its threadpool so a slow query does not block the event loop. POST /v1/reports only
 enqueues a row; the worker (ledgerline.worker) runs the pipeline.
+
+POST /v1/reports is the only endpoint that spends money (LLM calls), so it needs the
+`X-API-Key` header to match LEDGERLINE_API_KEY and is disabled when that is unset. Reads
+are public. Every 422 has FastAPI's list shape: {"detail": [{"loc", "msg", "type"}]}.
 """
 
 import base64
+import hmac
+import os
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text, tuple_
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.orm import Session
 
 from ledgerline.db import engine
 from ledgerline.models import Claim, Company, EvalRun, Evidence, Report, Span, Verdict
+from ledgerline.pipeline import FY_UNSUPPORTED
 from ledgerline.report.generate import ReportView, build_report
+
+MAX_QUEUED = 50  # backlog cap: beyond it POST answers 429 instead of growing the queue
+CURSOR_ID_MAX_LEN = 36  # a UUID; claim ids are far shorter
 
 app = FastAPI(title="Ledgerline", version="1.0.0")
 
@@ -42,6 +53,13 @@ class ReportRequest(BaseModel):
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Za-z.\-]+$")
     fiscal_year: int = Field(ge=2000, le=2100)
     fiscal_period: Literal["Q1", "Q2", "Q3", "Q4", "FY"]
+
+    @field_validator("fiscal_period")
+    @classmethod
+    def _no_fy(cls, v: str) -> str:
+        if v == "FY":
+            raise ValueError(FY_UNSUPPORTED)
+        return v
 
 
 class Job(BaseModel):
@@ -139,6 +157,7 @@ class EvalRunOut(ORM):
     created_at: datetime
     git_sha: str | None
     layer: str
+    name: str
     metrics: dict
     details: dict
 
@@ -153,12 +172,19 @@ def _encode(created_at: datetime, id_: object) -> str:
     return base64.urlsafe_b64encode(f"{created_at.isoformat()}|{id_}".encode()).decode()
 
 
+def _invalid(loc: tuple, msg: str, value: object) -> RequestValidationError:
+    return RequestValidationError([{"type": "value_error", "loc": loc, "msg": msg,
+                                    "input": value}])
+
+
 def _decode(cursor: str) -> tuple[datetime, str]:
     try:
         ts, id_ = base64.urlsafe_b64decode(cursor.encode()).decode().split("|")
+        if not (id_.isascii() and 0 < len(id_) <= CURSOR_ID_MAX_LEN):
+            raise ValueError(id_)
         return datetime.fromisoformat(ts), id_
     except ValueError:  # covers binascii.Error and UnicodeDecodeError
-        raise HTTPException(422, "invalid cursor") from None
+        raise _invalid(("query", "cursor"), "invalid cursor", cursor) from None
 
 
 def _company(s: Session, ticker: str) -> Company:
@@ -174,13 +200,38 @@ def healthz(s: DB) -> dict:
     return {"status": "ok"}
 
 
-@app.post("/v1/reports", status_code=202)
-def create_report(body: ReportRequest, s: DB) -> Job:
+def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
+    expected = os.environ.get("LEDGERLINE_API_KEY")
+    if not expected:
+        raise HTTPException(503, "report creation is disabled: LEDGERLINE_API_KEY is not set")
+    if x_api_key is None or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        raise HTTPException(401, "missing or invalid X-API-Key",
+                            headers={"WWW-Authenticate": "X-API-Key"})
+
+
+@app.post("/v1/reports", status_code=202, dependencies=[Depends(require_api_key)])
+def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
+    """Idempotent per (company, quarter): an existing queued, running or done report is
+    returned instead of a new one. Only a failed report is re-run by POSTing again."""
     company = _company(s, body.ticker)
-    report = Report(company_id=company.id, fiscal_year=body.fiscal_year,
-                    fiscal_period=body.fiscal_period, status="queued")
-    s.add(report)
+    key = (company.id, body.fiscal_year, body.fiscal_period)
+    # Serialise POSTs for the same quarter so two concurrent requests cannot both insert.
+    s.execute(select(func.pg_advisory_xact_lock(func.hashtext(f"report:{key}"))))
+    report = s.scalar(select(Report).where(
+        Report.company_id == company.id, Report.fiscal_year == body.fiscal_year,
+        Report.fiscal_period == body.fiscal_period,
+        Report.status.in_(("queued", "running", "done")),
+    ).order_by(Report.created_at.desc()).limit(1))
+    if report is None:
+        queued = s.scalar(select(func.count()).where(Report.status == "queued"))
+        if queued >= MAX_QUEUED:
+            raise HTTPException(429, f"{queued} reports already queued; retry later",
+                                headers={"Retry-After": "60"})
+        report = Report(company_id=company.id, fiscal_year=body.fiscal_year,
+                        fiscal_period=body.fiscal_period, status="queued")
+        s.add(report)
     s.commit()
+    response.headers["Location"] = f"/v1/reports/{report.id}"
     return Job(job_id=report.id)
 
 
@@ -195,12 +246,12 @@ def get_report(job_id: uuid.UUID, s: DB) -> ReportView:
 @app.get("/v1/reports")
 def list_reports(s: DB, limit: Limit = 20, cursor: str | None = None) -> Page[ReportSummary]:
     q = select(Report, Company.ticker).join(Company)
-    if cursor:
+    if cursor is not None:
         ts, id_ = _decode(cursor)
         try:
             key = uuid.UUID(id_)
         except ValueError:
-            raise HTTPException(422, "invalid cursor") from None
+            raise _invalid(("query", "cursor"), "invalid cursor", cursor) from None
         q = q.where(tuple_(Report.created_at, Report.id) < tuple_(ts, key))
     rows = s.execute(q.order_by(Report.created_at.desc(), Report.id.desc()).limit(limit + 1)).all()
     fields = ReportSummary.model_fields.keys() - {"ticker"}
@@ -236,10 +287,10 @@ def company_claims(ticker: str, s: DB, limit: Limit = 50,
                    cursor: str | None = None) -> Page[ClaimOut]:
     company = _company(s, ticker)
     q = select(Claim).where(Claim.company_id == company.id)
-    if cursor:
+    if cursor is not None:
         ts, id_ = _decode(cursor)
-        if not id_.isdigit():
-            raise HTTPException(422, "invalid cursor")
+        if not id_.isdigit():  # ASCII and bounded by _decode, so int() cannot blow up
+            raise _invalid(("query", "cursor"), "invalid cursor", cursor)
         q = q.where(tuple_(Claim.created_at, Claim.id) < tuple_(ts, int(id_)))
     rows = s.scalars(q.order_by(Claim.created_at.desc(), Claim.id.desc()).limit(limit + 1)).all()
     last = rows[limit - 1] if len(rows) > limit else None
@@ -249,9 +300,10 @@ def company_claims(ticker: str, s: DB, limit: Limit = 50,
 
 @app.get("/v1/evals/latest")
 def evals_latest(s: DB) -> list[EvalRunOut]:
-    """Public on purpose: the eval numbers are the product's credibility (§11, §20)."""
+    """Public on purpose: the eval numbers are the product's credibility (§11, §20).
+    The latest run of each eval: L1 alone has four (retrieval, ner, wer, forecast)."""
     runs = s.scalars(
-        select(EvalRun).distinct(EvalRun.layer)
-        .order_by(EvalRun.layer, EvalRun.created_at.desc(), EvalRun.id.desc())
+        select(EvalRun).distinct(EvalRun.layer, EvalRun.name)
+        .order_by(EvalRun.layer, EvalRun.name, EvalRun.created_at.desc(), EvalRun.id.desc())
     ).all()
     return [EvalRunOut.model_validate(r) for r in runs]
