@@ -62,10 +62,10 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [ ] D5 CI gate runs against seeded data (fixture DB dump or golden-set fixtures), records a baseline on main, blocks >2% regression; document absolute-vs-relative choice vs PRD §12 wording.
 
 ## E. Extraction quality (`ledgerline/extract/**`, `tests/test_extract_*`, `ledgerline/evals/ner.py`)
-- [ ] E1 Non-earnings 8-Ks stored as releases (NKE CFO-transition, filing 176): extraction must not count them; flag/skip releases without results content (coordinate with ingest: an `is_earnings_release` check in extract is enough).
-- [ ] E2 Six false guidance claims (AMZN "$1B Prime savings", CSCO "AI revenue $4B", ADBE headline lines x2, HD fragments x2): tighten guidance typing.
-- [ ] E3 Full-year figures in Q4 releases stamped as the quarter (META $200.97B): detect "full year"/"fiscal year"/twelve-months context and set target period FY.
-- [ ] E4 Segment/partial actuals linked as company totals ("Revenues for Converse", INTC/AMZN segment figures): tighten segment qualifiers.
-- [ ] E5 `non_claim` bucket precision 0.611 (real claims discarded): reduce false discards (3 comparisons, 2 guidance, 2 reported results in the gold set).
-- [ ] E6 Guidance recall: parse guidance tables and cue-less forward-looking bullets where the scale and target period are explicit.
-- [ ] E7 Re-run extraction over all releases, re-link, and report the before/after table (claims per release, guidance precision on a hand check, NER/typing eval). Keep gold sets frozen (do not tune against them; report results on them honestly).
+- [x] E1 Non-earnings 8-Ks stored as releases (NKE CFO-transition, filing 176): extraction must not count them; flag/skip releases without results content (coordinate with ingest: an `is_earnings_release` check in extract is enough).
+- [x] E2 Six false guidance claims (AMZN "$1B Prime savings", CSCO "AI revenue $4B", ADBE headline lines x2, HD fragments x2): tighten guidance typing.
+- [x] E3 Full-year figures in Q4 releases stamped as the quarter (META $200.97B): detect "full year"/"fiscal year"/twelve-months context and set target period FY.
+- [x] E4 Segment/partial actuals linked as company totals ("Revenues for Converse", INTC/AMZN segment figures): tighten segment qualifiers.
+- [x] E5 `non_claim` bucket precision 0.611 (real claims discarded): reduce false discards (3 comparisons, 2 guidance, 2 reported results in the gold set).
+- [x] E6 Guidance recall: parse guidance tables and cue-less forward-looking bullets where the scale and target period are explicit.
+- [x] E7 Re-run extraction over all releases, re-link, and report the before/after table (claims per release, guidance precision on a hand check, NER/typing eval). Keep gold sets frozen (do not tune against them; report results on them honestly).

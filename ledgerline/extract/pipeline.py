@@ -5,6 +5,8 @@ what is measured here is exactly what runs. Per line of the source text:
 
   table row ("Revenue | $96,221 | ...")  -> reported/comparison claims, only when the table
                                             header states both the scale and the period
+  table row under an outlook heading      -> guidance, from the GAAP column, when the target
+                                            period lies after the reported quarter
   safe-harbor / boilerplate              -> dropped before any parsing
   heading or lead-in ("Outlook", "...as follows:") -> section context (guidance?, period)
   prose sentence                         -> one claim per value, typed by local cues;
@@ -14,8 +16,10 @@ Unmapped metrics: a value whose metric is outside CONCEPTS, or narrowed to a seg
 ("Data Center revenue"), is kept as claim_type "qualitative" with metric None and its value,
 so the filing-RAG agent can still check it. Non-GAAP and constant-currency values are
 dropped: no SEC filing states them as reported facts, so they can only ever be unverifiable.
+So are trailing-twelve-month and year-to-date values, which have no fiscal period here.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -41,7 +45,8 @@ from ledgerline.extract.normalize import (
 from ledgerline.models import CallAudio, Claim, Company, Filing, Segment
 from ledgerline.schemas import ClaimDraft
 
-EXTRACTOR_VERSION = "s4-rules-1"
+EXTRACTOR_VERSION = "s4-rules-2"
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- cues
 
@@ -65,16 +70,17 @@ _FORWARD = re.compile(
     r"|to decline)\b|(?<![A-Za-z])targets? (?:assumes?|of|for)\b",
     re.IGNORECASE,
 )
-_PAST = re.compile(r"\b(?:was|were|reported|grew|increased|decreased|declined|rose|fell|delivered"
-                   r"|achieved|generated|posted|returned|had|exceeded)\b", re.IGNORECASE)
+_PAST = re.compile(r"\b(?:was|were|reports|reported|grew|increased|decreased|declined|rose|fell|delivered"
+                   r"|achieved|generated|posted|returned|had|exceeded|surpass(?:es|ed))\b", re.IGNORECASE)
 _CHANGE_BEFORE = re.compile(
-    r"\b(?P<cue>up|down|increased?|decreased?|increase of|decrease of|grew|grow|growth(?: of)?"
+    r"\b(?P<cue>up|down|(?:in|de)creases? of|(?:in|de)crease[sd]?|grew|grow|growth(?: of)?"
     r"|rose|fell|declined?|decline of|expanded|contracted|improved|higher|lower)"
-    r"(?:\s+(?:by|of|approximately|about|nearly|more than|over|roughly|to))*\s*$",
+    r"(?:\s+(?:by|of|approximately|about|nearly|more than|over|roughly|to|be|between|in the range of"
+    r"|over (?:the )?(?:prior|previous) (?:year|quarter)))*\s*$",
     re.IGNORECASE,
 )
 _CHANGE_AFTER = re.compile(r"^\s*(?:year[\s-]over[\s-]year\s+|yoy\s+|sequential\s+)?"
-                           r"(?:growth|increase|decrease|decline|improvement)\b", re.IGNORECASE)
+                           r"(?P<cue>growth|increase|decrease|decline|improvement)\b", re.IGNORECASE)
 _NEGATIVE = re.compile(r"down|decrease|decline|fell|lower|contracted", re.IGNORECASE)
 _QOQ = re.compile(r"previous quarter|prior quarter|sequential|quarter[\s-]over[\s-]quarter|\bq/q\b"
                   r"|last quarter", re.IGNORECASE)
@@ -82,13 +88,20 @@ _YOY = re.compile(r"year[\s-]over[\s-]year|a year ago|\byoy\b|\by/y\b|prior year
                   re.IGNORECASE)
 _BASELINE = re.compile(r"\b(?:compared (?:with|to)|versus|vs\.?)\s", re.IGNORECASE)
 _BASELINE_END = re.compile(r";|,\s+and\b")
+# "versus the prior year to $1.63": the baseline ends where the current value starts
+_ZONE_END = re.compile(_BASELINE_END.pattern + r"|\s+to\s+(?=[$\d])")
 _RELATIVE = re.compile(r"(?:last|prior|previous|same period of|a year ago|corresponding period of)\s*$",
                        re.IGNORECASE)
 _DROP_AFTER = re.compile(r"^[^,;]{0,25}?(?:constant currency|currency[\s-]neutral)"
                          r"|^\s*(?:benefit|charge|impact|headwind|tailwind)", re.IGNORECASE)
 # A component of the number, not the number: "including a favorable impact of $0.11".
-_COMPONENT = re.compile(r"(?:\b(?:includ(?:ing|ed)|impact|benefit|charge|effect)\b[^,;$%]*|\bfrom\s*"
+_COMPONENT = re.compile(r"(?:\b(?:includ(?:e|es|ing|ed)|impact|benefit|charge|effect|contribut\w*)\b[^,;$%]*"
+                        r"|\bfrom\s*"
                         r"|\bprior (?:range|outlook|guidance|expectations?)\b[^,;$%]*)$", re.IGNORECASE)
+# A sentence led by "Excluding ..." or "Without ..." restates figures on another basis.
+_EX_BASIS = re.compile(r"(?:excluding|without)\b", re.IGNORECASE)
+_TTM = re.compile(r"trailing[\s-]twelve[\s-]months?|\bttm\b", re.IGNORECASE)
+_RUN_SEP = re.compile(r"\s*(?:,\s*and|,|and)\s*")
 _MAX_GAP = 100  # chars between a metric name (or its previous value) and a value it owns
 _QUAL_CUE = re.compile(
     r"\b(?:record|strong(?:est)?|exceptional|exceed(?:ed|ing)?|beat|double-digit|all-time high"
@@ -101,8 +114,9 @@ _QUAL_SUBJECT = re.compile(r"\b(?:results|quarter|demand|performance|business|ma
 _NEUTRAL_HEADING = re.compile(
     r"results|highlights|summary|financial|outlook|guidance|targets?|quarter|fiscal|year|review"
     r"|performance|overview|income|statements?|consolidated|expects?", re.IGNORECASE)
-_SKIP_HEADING = re.compile(r"non-gaap|definition|forward-looking|reconciliation|safe harbor"
+_SKIP_HEADING = re.compile(r"(?<!gaap and )non-gaap|definition|forward-looking|reconciliation|safe harbor"
                            r"|about [A-Z]|cautionary", re.IGNORECASE)
+_YTD = re.compile(r"year[\s-]to[\s-]date|\b(?:six|nine) months\b", re.IGNORECASE)
 _BULLET = "•◦▪·-–*"
 _ABBREV = {"inc", "corp", "co", "ltd", "u.s", "no", "vs", "st", "jr", "mr", "ms", "dr", "p.m",
            "a.m", "calif", "wash", "ore", "approx", "e.g", "i.e", "n.a", "u.k", "dept"}
@@ -143,6 +157,7 @@ class _Ctx:
     segment: bool = False  # heading names a business segment: no company-wide metric below
     skip: bool = False  # safe harbor, non-GAAP definitions: nothing below is a claim
     last_metric: Mention | None = None
+    heading: str = ""
 
 
 def _heading_ctx(line: str, fy: int, fp: str, fye: str | None) -> _Ctx | None:
@@ -158,8 +173,10 @@ def _heading_ctx(line: str, fy: int, fp: str, fye: str | None) -> _Ctx | None:
         if not _RELATIVE.search(s[:a]):
             period = resolve_period(kind, g, fy, fp, forward=guidance, fiscal_year_end=fye)
             break
+    # "Year-to-Date Results", "Nine Months Ended ...": cumulative figures, no fiscal period of ours
+    ytd = bool(_YTD.search(s)) and not re.search(r"quarter", s, re.IGNORECASE)
     return _Ctx(guidance, period, segment=not _NEUTRAL_HEADING.search(s),
-                skip=bool(_SKIP_HEADING.search(s)))
+                skip=bool(_SKIP_HEADING.search(s)) or ytd, heading=s)
 
 
 def _mentions(sent: str, use_ner: bool) -> list[Mention]:
@@ -183,7 +200,7 @@ def _mentions(sent: str, use_ner: bool) -> list[Mention]:
 def _baseline_zones(sent: str) -> list[tuple[int, int]]:
     zones = []
     for m in _BASELINE.finditer(sent):
-        end = _BASELINE_END.search(sent, m.end())
+        end = _ZONE_END.search(sent, m.end())
         zones.append((m.start(), end.start() if end else len(sent)))
     return zones
 
@@ -207,9 +224,46 @@ def _align_unit(metric: str | None, v: Value, is_change: bool) -> tuple[str | No
 # ---------------------------------------------------------------- prose
 
 
+def _periods_named(text: str, fy: int, fp: str, fye: str | None) -> list[tuple[int, str] | None] | None:
+    """Periods in reading order, None standing for a year-to-date span (no period of ours).
+    Returns None when a period expression cannot be resolved: the order is then unknown."""
+    hits = [(a, resolve_period(k, g, fy, fp, fiscal_year_end=fye)) for a, _, k, g in find_periods(text)]
+    if any(p is None for _, p in hits):
+        return None
+    hits += [(m.start(), None) for m in _YTD.finditer(text)]
+    return [p for _, p in sorted(hits, key=lambda h: h[0])]
+
+
+def _respectively(sent: str, values: list[Value], fy: int, fp: str, fye: str | None,
+                  heading: str) -> dict[int, tuple[int, str] | None]:
+    """Value index -> period for "$59.89 billion and $200.97 billion ... for the fourth quarter
+    and full year 2025, respectively": the k-th value of a run takes the k-th period named, in
+    the sentence or else in the section heading ("Second-Quarter and Year-to-Date Results").
+    None: a year-to-date value, to be dropped."""
+    out: dict[int, tuple[int, str] | None] = {}
+    i = 0
+    while i < len(values):
+        j = i
+        while j + 1 < len(values) and values[j + 1].kind == values[i].kind and _RUN_SEP.fullmatch(
+                sent[values[j].end:values[j + 1].start]):
+            j += 1
+        resp = sent.find("respectively", values[j].end)
+        # "GAAP and non-GAAP EPS were $4.90 and $4.77, respectively" pairs bases, not periods
+        if j > i and resp != -1 and not re.search(r"gaap and non-gaap", sent, re.IGNORECASE):
+            # periods are named after the last value before "respectively", shared by every run
+            last = max(v.end for v in values if v.start < resp)
+            periods = _periods_named(sent[last:resp], fy, fp, fye)
+            if periods == [] and not find_periods(sent):  # "... increased 137% and 72%, respectively"
+                periods = _periods_named(heading, fy, fp, fye)
+            if periods and len(periods) == j - i + 1:
+                out |= dict(zip(range(i, j + 1), periods, strict=True))
+        i = j + 1
+    return out
+
+
 def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str | None,
                      use_ner: bool) -> list[ClaimDraft]:
-    if _BOILER.search(sent):
+    if _BOILER.search(sent) or _EX_BASIS.match(sent):
         return []
     values = parse_values(sent)
     mentions = _mentions(sent, use_ner) if (values or _QUAL_CUE.search(sent)) else []
@@ -217,23 +271,47 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         for m in mentions:
             m.metric = None
     zones = _baseline_zones(sent)
+    if any(not any(a <= m.start() < b for a, b in zones) for m in _TTM.finditer(sent)):
+        return []  # trailing twelve months: not a fiscal period any fact is filed for
+    resp = _respectively(sent, values, fy, fp, fye, ctx.heading)
+    # "FY ’25: Net Sales 0%; Organic Sales +2%; Diluted EPS +8%": the label dates every clause
+    label = re.match(r"[^:;.]{2,20}:", sent)
+    label_hit = next(((k, g) for _, _, k, g in find_periods(label[0])), None) if label else None
     drafts: list[ClaimDraft] = []
     prev_end = 0
     last_end: dict[int, int] = {}
+    components: set[int] = set()  # value indices that are parts of another number
+    change_cue: dict[int, re.Match | None] = {}  # value index -> the cue that made it a change
     for i, v in enumerate(values):
         nxt = values[i + 1].start if i + 1 < len(values) else len(sent)
         post_end = min(nxt, (re.search(r"[,;.](?:\s|$)", sent[v.end:]) or re.search("$", sent[v.end:])).start()
                        + v.end)
         before, after = sent[prev_end:v.start], sent[v.end:nxt]
         prev_end = v.end
-        if any(a <= v.start < b for a, b in zones) or _COMPONENT.search(before):
-            continue  # prior-period baseline or an adjustment, not a claim about this period
+        # "included 6% growth in price/mix and a 1% decline in ...": both are parts of the change
+        if _COMPONENT.search(before) or (i - 1 in components and re.fullmatch(r"[^;.]{0,40}\band\b[^;.]*", before)):
+            components.add(i)
+            continue
+        if any(a <= v.start < b for a, b in zones):
+            continue  # prior-period baseline, not a claim about this period
         if _DROP_AFTER.search(after) or re.search(r"\bwould have been\s*$", before):
             continue  # constant currency, a component, or a counterfactual
-        change = v.kind in ("percent", "pp", "flat") and bool(
-            v.kind == "flat" or _CHANGE_BEFORE.search(before[-40:]) or _CHANGE_AFTER.search(after))
-        if v.kind in ("money", "per_share") and _CHANGE_BEFORE.search(before[-25:]):
-            continue  # dollar deltas ("an increase of $2.6 billion") are not stored
+        cue_before = _CHANGE_BEFORE.search(before[-40:])
+        if i - 1 in change_cue and values[i - 1].kind == v.kind and _RUN_SEP.fullmatch(before):
+            cue_before = change_cue[i - 1]  # "increases of 24% and 22%": the run shares its cue
+            change = True
+        else:
+            cue_after = _CHANGE_AFTER.search(after)
+            signed = re.search(r"(?:^|[\s,(])\+\s*$", before)  # "Diluted EPS $1.88, +34%"
+            change = v.kind in ("percent", "pp", "flat") and bool(v.kind == "flat" or cue_before or cue_after
+                                                                  or signed)
+            if change and not cue_before and cue_after:
+                cue_before = cue_after  # "a two percent decrease versus the prior year"
+        if change:
+            change_cue[i] = cue_before
+        if v.kind in ("money", "per_share") and _CHANGE_BEFORE.search(before[-25:]) and not re.search(
+                r"\bto\s*$", before):
+            continue  # dollar deltas ("an increase of $2.6 billion"); "increased to $68.6 billion" is a level
         # metric: "$4 billion of revenue" -> the one right after; else the nearest before
         mention = next((m for m in mentions if m.start >= v.end
                         and re.fullmatch(r"\s*(?:of|in)\s+(?:[\w-]+\s+){0,2}", sent[v.end:m.start])), None)
@@ -251,8 +329,12 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         between = sent[mention.end:v.start] if mention.end <= v.start else ""
         if re.search(r"would have|constant currency|currency[\s-]neutral", between, re.IGNORECASE):
             continue
+        if id(mention) not in last_end and re.search(r",\s+(?!includ|exclud)\w+ing\s", between):
+            continue  # "record sales, ..., saving Prime members $1 billion": a clause with its own subject
         last_end[id(mention)] = v.end
-        ng_window = sent[mention.end if mention.end <= v.start else v.end:v.start] + sent[v.end:post_end]
+        # after the value, only its own words: "$0.31 and non-GAAP EPS of $0.38" does not make $0.31 non-GAAP
+        ng_window = (sent[mention.end if mention.end <= v.start else v.end:v.start]
+                     + re.split(r"\s+and\s+", sent[v.end:post_end])[0])
         clause_end = _BASELINE_END.search(sent, v.end)
         basis = re.search(r"on an? (non-gaap|gaap|adjusted) basis", sent[v.end:clause_end.start() if clause_end
                                                                      else len(sent)], re.IGNORECASE)
@@ -290,10 +372,16 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         target = None
         if explicit:
             target = resolve_period(*explicit, fy, fp, forward=forward, fiscal_year_end=fye)
+        if target is None and label_hit:
+            target = resolve_period(*label_hit, fy, fp, forward=forward, fiscal_year_end=fye)
         if target is None and ctx.period and ctx.guidance == forward:
             target = ctx.period
         if target is None and not forward:
             target = (fy, fp)
+        if i in resp:
+            if resp[i] is None:
+                continue  # the year-to-date value of a "quarter and year-to-date" pair
+            target = resp[i]
         if target and not change and _key(*target) > _key(fy, fp):
             forward = True
         claim_type = "guidance" if forward else "comparison" if change else "reported_result"
@@ -301,8 +389,7 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         if change:
             comparison = "qoq" if _QOQ.search(after) and not _YOY.search(after[:_QOQ.search(after).start()]) else "yoy"
         value, value_high = v.value, v.value_high
-        cue_before = _CHANGE_BEFORE.search(before[-40:]) if change else None
-        if cue_before and _NEGATIVE.match(cue_before["cue"]):
+        if change and cue_before and _NEGATIVE.match(cue_before["cue"]):
             value, value_high = (-value_high, -value) if value_high is not None else (-value, None)
 
         # span: from the metric name (if it precedes) to the value, plus the yoy/qoq phrase
@@ -347,6 +434,7 @@ class _Table:
     header: list[str] | None = None
     parent: str = ""
     rows_seen: bool = False
+    guidance: tuple[int, str] | None = None  # target period of an outlook table ("Financial Targets")
 
 
 def _table_header(titles: list[str], header_rows: list[str], fy: int, fp: str) -> _Table:
@@ -362,7 +450,12 @@ def _table_header(titles: list[str], header_rows: list[str], fy: int, fp: str) -
     # Only titles decide this: a GAAP table's header row may name a non-GAAP column.
     if re.search(r"segment|reconciliation|non-gaap|balance sheet", " ".join(titles), re.IGNORECASE):
         t.skip = True
-    first = re.search(r"three months ended|twelve months ended|(?:fiscal )?year ended|six months ended"
+    # Columns named after business units ("CCPG | DCAI | ... | Intersegment Eliminations | Total
+    # Consolidated"): the first number is a segment's, not the company's.
+    if re.search(r"segment|eliminations|all other|corporate unallocated|total consolidated",
+                 " ".join(header_rows), re.IGNORECASE):
+        t.skip = True
+    first = re.search(r"three months ended|quarters? ended|twelve months ended|(?:fiscal )?year ended|six months ended"
                       r"|nine months ended|\bQ([1-4]) FY ?'?(\d{2,4})\b|\b(first|second|third|fourth)[\s-]quarter\b",
                       joined, re.IGNORECASE)
     if first is None:
@@ -373,7 +466,7 @@ def _table_header(titles: list[str], header_rows: list[str], fy: int, fp: str) -
     elif first[3]:  # "Third-Quarter | Year-to-Date": only trusted when it names the source quarter
         q = ("first", "second", "third", "fourth").index(first[3].lower()) + 1
         t.period = (fy, fp) if fp == f"Q{q}" else None
-    elif first[0].lower().startswith("three"):
+    elif re.match(r"three|quarter", first[0], re.IGNORECASE):
         t.period = (fy, fp) if fp != "FY" else None
     elif re.match(r"twelve|(?:fiscal )?year", first[0], re.IGNORECASE):
         t.period = (fy, "FY")
@@ -387,10 +480,69 @@ def _table_header(titles: list[str], header_rows: list[str], fy: int, fp: str) -
     return t
 
 
+def _has_value(cell: str) -> bool:
+    return (parse_cell(cell) is not None and not re.fullmatch(r"(?:19|20)\d\d", cell.strip())) or bool(
+        parse_values(cell))
+
+
+def _guidance_period(titles: list[str], header_rows: list[str], ctx: _Ctx, fy: int, fp: str,
+                     fye: str | None) -> tuple[int, str] | None:
+    """Target period of a table under an outlook heading: the header's own ("Q3 2026 | GAAP |
+    Non-GAAP"), else the lead-in's. None (not an outlook table) unless it lies after (fy, fp)."""
+    if re.search(r"reconciliation", " ".join(titles), re.IGNORECASE):
+        return None
+    hits = find_periods(" ".join(header_rows))
+    if any((p := resolve_period(k, g, fy, fp, fiscal_year_end=fye)) and _key(*p) <= _key(fy, fp)
+           for _, _, k, g in hits):
+        return None  # a column for the reported quarter or earlier: a results table
+    period = ctx.period
+    if hits:
+        period = resolve_period(hits[0][2], hits[0][3], fy, fp, forward=True, fiscal_year_end=fye)
+    return period if period and _key(*period) > _key(fy, fp) else None
+
+
+def _guidance_row(line: str, base: int, t: _Table) -> list[ClaimDraft]:
+    """"Total revenue | $6.075 billion to $6.125 billion", "Earnings per share | GAAP: $4.27 to
+    $4.32 | Non-GAAP: ..." -> one guidance claim from the GAAP (or only) column."""
+    cells = line.split(" | ")
+    metric = _row_label(cells[0], t.parent)
+    if metric is None:
+        return []
+    header = t.header if t.header and len(t.header) == len(cells) else [""] * len(cells)
+    offset = len(cells[0]) + 3
+    for cell, head in zip(cells[1:], header[1:], strict=True):
+        vals = parse_values(cell)
+        if vals and not NON_GAAP.search(cell) and not NON_GAAP.search(head):
+            break
+        offset += len(cell) + 3
+    else:
+        return []
+    v = vals[0]
+    change = v.kind in ("percent", "pp") and CONCEPTS[metric].unit != "percent"
+    metric, unit = _align_unit(metric, v, change)
+    if metric is None:
+        return []
+    value, value_high = v.value, v.value_high
+    scale_word = re.search(r"(?:thousand|million|billion|trillion|\d\s?[BMKT])\b", cell, re.IGNORECASE)
+    if unit == "USD" and not scale_word:
+        if t.scale is None:
+            return []  # a bare "$9.2" with no stated scale is not a number we can store
+        value = scaled(value, t.scale)
+        value_high = scaled(value_high, t.scale) if value_high is not None else None
+    end = offset + v.end
+    return [ClaimDraft(text=line[:end], span_start=base, span_end=base + end, claim_type="guidance",
+                       metric=metric, value=value, value_high=value_high, unit=unit,
+                       target_fiscal_year=t.guidance[0], target_fiscal_period=t.guidance[1],
+                       comparison="yoy" if change else None, hedging_score=hedging_score(line[:end]))]
+
+
 def _row_label(label: str, parent: str) -> str | None:
     def norm(s: str) -> str:
-        s = re.sub(r"\([^)]*\)|\*|\d+$", "", s).strip().rstrip(":").strip().lower()
-        return re.sub(r"^total\s+", "", s)
+        s = re.sub(r"\([^)]*\)|\*|\d+$|\battributable to (?!non)[\w.&]+", "", s, flags=re.IGNORECASE)
+        s = s.strip().rstrip(":").strip().lower()
+        s = re.sub(r"\s+", " ", re.sub(r"^total\s+", "", s))
+        # "Earnings (Loss) Per Share Attributable to Intel—Diluted"
+        return f"diluted {s[:-7].rstrip(' —-,')}" if s.endswith("diluted") else s
 
     if NON_GAAP.search(label) or NON_GAAP.search(parent):
         return None
@@ -459,8 +611,9 @@ def extract_claims(text: str, *, fiscal_year: int, fiscal_period: str,
     speaker_roles: (char_start, char_end, role); analyst and operator turns are skipped.
     Claims whose metric is outside CONCEPTS are returned as "qualitative" (see module doc).
     """
-    cands = extract_candidates(text, fiscal_year=fiscal_year, fiscal_period=fiscal_period,
-                               fiscal_year_end=fiscal_year_end, use_ner=use_ner)
+    cands = _demote_partial_revenue(extract_candidates(
+        text, fiscal_year=fiscal_year, fiscal_period=fiscal_period, fiscal_year_end=fiscal_year_end,
+        use_ner=use_ner))
     return _finish([d if d.metric or d.claim_type == "qualitative"
                     else d.model_copy(update={"claim_type": "qualitative", "comparison": None})
                     for d in cands], speaker_roles)
@@ -483,17 +636,19 @@ def extract_candidates(text: str, *, fiscal_year: int, fiscal_period: str,
         if " | " in line:
             cells = line.split(" | ")
             # header row: no numbers, or only column years ("2024 | 2025")
-            if all(parse_cell(c) is None or re.fullmatch(r"(?:19|20)\d\d", c) for c in cells[1:]):
+            if not any(_has_value(c) for c in cells[1:]):
                 if table is not None and table.rows_seen:
                     titles, header_rows = [], []  # a new table right after the last one
                 header_rows.append(line)
                 table = _table_header(titles, header_rows, fy, fp)
                 table.header = cells
-            else:
-                if table is None:
-                    table = _table_header(titles, header_rows, fy, fp)
-                table.rows_seen, table.parent = True, parent
-                drafts += _table_claims(line, base, table)
+                continue
+            if table is None:
+                table = _table_header(titles, header_rows, fy, fp)
+            if not table.rows_seen and ctx.guidance and not ctx.skip:
+                table.guidance = _guidance_period(titles, header_rows, ctx, fy, fp, fye)
+            table.rows_seen, table.parent = True, parent
+            drafts += _guidance_row(line, base, table) if table.guidance else _table_claims(line, base, table)
             continue
         if re.match(r"\(\d{1,2}\)|\([a-z]\)", line):
             continue  # footnote: qualifies a table cell, not a management claim
@@ -514,6 +669,24 @@ def extract_candidates(text: str, *, fiscal_year: int, fiscal_period: str,
         for s, e in _sentences(line):
             drafts += _sentence_claims(line[s:e], base + s, ctx, fy, fp, fye, use_ner)
     return drafts
+
+
+def _demote_partial_revenue(drafts: list[ClaimDraft]) -> list[ClaimDraft]:
+    """A company has one revenue per period. A dollar revenue figure under half the largest one
+    stated for the same target period is a segment's, product's or customer group's ("revenue
+    to $4 billion" for AI infrastructure next to $63 billion company guidance): metric None.
+    ponytail: trusts the largest figure; if that one is itself mis-scoped, the true total is
+    demoted instead. A per-document total from the income statement table would be stricter."""
+    def usd_revenue(d: ClaimDraft) -> bool:
+        return d.metric == "revenue" and d.unit == "USD" and d.value is not None and d.value > 0
+
+    top: dict[tuple, float] = {}
+    for d in filter(usd_revenue, drafts):
+        k = (d.target_fiscal_year, d.target_fiscal_period)
+        top[k] = max(top.get(k, 0.0), d.value_high or d.value)
+    return [d.model_copy(update={"metric": None}) if usd_revenue(d)
+            and (d.value_high or d.value) < 0.5 * top[(d.target_fiscal_year, d.target_fiscal_period)] else d
+            for d in drafts]
 
 
 def _finish(drafts: list[ClaimDraft], roles: list[tuple[int, int, str]] | None) -> list[ClaimDraft]:
@@ -546,6 +719,17 @@ def _row(d: ClaimDraft, **src) -> dict:
     return d.model_dump() | src | {"extractor_version": EXTRACTOR_VERSION}
 
 
+_RESULTS = re.compile(r"\b(?:report(?:s|ed|ing)?|announce[sd]?)\b[^.\n]{0,80}\bresults\b", re.IGNORECASE)
+
+
+def is_earnings_release(text: str) -> bool:
+    """An exhibit that reports a quarter's results: a results announcement in its opening and at
+    least ten dollar figures. An event release filed as the quarter's EX-99.1 (NKE's CFO
+    transition, filing 176) has neither, and any claim taken from it would be noise."""
+    money = sum(v.kind in ("money", "per_share") for v in parse_values(text))
+    return money >= 10 and bool(_RESULTS.search(text[:3000]))
+
+
 def extract_for_filing(s: Session, filing_id: int, use_ner: bool = True) -> int:
     """Claims from an 8-K EX-99.1 release; returns rows inserted (0 on a re-run)."""
     from ledgerline.ingest.documents import load_text
@@ -554,7 +738,11 @@ def extract_for_filing(s: Session, filing_id: int, use_ner: bool = True) -> int:
     if f is None or f.fiscal_year is None or f.fiscal_period is None:
         raise ValueError(f"filing {filing_id} missing or has no fiscal period")
     company = s.get(Company, f.company_id)
-    drafts = extract_claims(load_text(f), fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period,
+    text = load_text(f)
+    if not is_earnings_release(text):
+        log.warning("filing %s is not an earnings release (no results content): nothing extracted", filing_id)
+        return 0
+    drafts = extract_claims(text, fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period,
                             fiscal_year_end=company.fiscal_year_end, use_ner=use_ner)
     return _write(s, [_row(d, speaker_role="executive", company_id=f.company_id,
                            fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period,

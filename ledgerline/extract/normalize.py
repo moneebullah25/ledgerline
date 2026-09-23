@@ -42,6 +42,13 @@ _PERCENT = re.compile(rf"(?P<neg>-)?(?P<num>{_NUM})\s?(?:%|percent\b|per cent\b)
 _BPS = re.compile(rf"(?P<num>{_NUM})[\s-]?(?:basis[\s-]points?|bps)\b", re.IGNORECASE)
 _PP = re.compile(rf"(?P<num>{_NUM})[\s-]?(?:percentage[\s-]points?|points?|pts)\b", re.IGNORECASE)
 _FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
+_WORDS = {w: i for i, w in enumerate([
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven",
+    "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"])}
+_W = "|".join(_WORDS)
+# "seven percent", "one to three percent", "four and a half percent" (P&G, KO spell them out)
+_WORD_PCT = re.compile(rf"\b(?P<lo>{_W})(?P<half>\s+and\s+a\s+half)?(?:\s+(?:to|and)\s+(?P<hi>{_W})"
+                       rf"(?P<hhalf>\s+and\s+a\s+half)?)?\s+percent\b", re.IGNORECASE)
 _RANGE_SEP = re.compile(r"^\s*(?:to|and|through|-|–|—)\s*$", re.IGNORECASE)
 _PLUS_MINUS = re.compile(r"^,?\s*(?:plus or minus|\+/-|±)\s*$", re.IGNORECASE)
 
@@ -102,6 +109,11 @@ def parse_values(text: str) -> list[Value]:
                 v = -v
             vals.append(Value(m.start(), m.end(), round(v, 6), "percent", kind))
             taken.append((m.start(), m.end()))
+    for m in _WORD_PCT.finditer(text):
+        lo = _WORDS[m["lo"].lower()] + (0.5 if m["half"] else 0.0)
+        hi = _WORDS[m["hi"].lower()] + (0.5 if m["hhalf"] else 0.0) if m["hi"] else None
+        if hi is None or hi >= lo:
+            vals.append(Value(m.start(), m.end(), lo, "percent", "percent", hi))
     for m in _FLAT.finditer(text):
         vals.append(Value(m.start(), m.end(), 0.0, "percent", "flat"))
     vals.sort(key=lambda v: v.start)
@@ -127,7 +139,9 @@ def _merge_ranges(text: str, vals: list[Value]) -> list[Value]:
         # Same kind only: "increased 890 basis points to 49.2 percent" is a change and a level.
         # "and" joins a range only after "between": "74.9% and 75.0%" is two values.
         and_ok = gap.strip() != "and" or text[:a.start].rstrip().lower().endswith("between")
-        if b and and_ok and _RANGE_SEP.match(gap) and (a.kind == b.kind or a.kind == "flat"):
+        # "$0.13 to $0.17 per share": the lower bound was printed without "per share"
+        kinds_ok = b and (a.kind == b.kind or a.kind == "flat" or (a.kind, b.kind) == ("money", "per_share"))
+        if kinds_ok and and_ok and _RANGE_SEP.match(gap):
             lo, hi = a.value, b.value
             if a.kind == "money" and b.kind == "money" and abs(lo) < 1e3 <= abs(hi):
                 # "$89 to $93 billion": the lower bound was printed without its scale.
@@ -169,7 +183,7 @@ _ORD = {"first": 1, "second": 2, "third": 3, "fourth": 4}
 _MONTHS = {m: i for i, m in enumerate(
     ["january", "february", "march", "april", "may", "june", "july", "august",
      "september", "october", "november", "december"], start=1)}
-_YR = r"'?(\d{4}|\d{2})\b"
+_YR = r"['’]?(\d{4}|\d{2})\b"
 _FISCAL = r"(?:fiscal(?:\s+year)?|fy)\s?"
 _PERIOD_RX = [
     # "fiscal 2026 third quarter", "FY26 Q3"
@@ -180,14 +194,19 @@ _PERIOD_RX = [
     # "Q2 FY27", "Q4 FY 2026", "Q3 2026", "Q1"
     ("q", re.compile(rf"\bQ([1-4])\b(?:\s*{_FISCAL}{_YR}|\s+(\d{{4}})\b)?", re.IGNORECASE)),
     ("next", re.compile(r"\bnext quarter\b", re.IGNORECASE)),
+    ("thisq", re.compile(r"\b(?:for|in|during) the (?:current )?quarter\b", re.IGNORECASE)),
     # "quarter ended June 27, 2026"; "fiscal year ended June 30, 2026"
     ("qended", re.compile(r"\bquarter ended\s+([A-Z][a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})")),
     ("fyended", re.compile(r"\b(?:fiscal\s+)?year ended\s+([A-Z][a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})")),
     # "December quarter", "June quarter"
     ("mq", re.compile(r"\b(March|June|September|December)\s+quarter\b", re.IGNORECASE)),
+    # "full year 2025": one period, not "full year" plus a bare year
+    ("fy", re.compile(rf"\bfull[\s-]year\s+(?:{_FISCAL})?(20\d\d)\b", re.IGNORECASE)),
     # "full year fiscal 2027", "fiscal 2025", "fiscal year 2026", "FY 2027", "FY27"
     ("fy", re.compile(rf"\b(?:full[\s-]year\s+)?{_FISCAL}{_YR}", re.IGNORECASE)),
-    ("fullyear", re.compile(r"\b(?:full[\s-]year|fiscal year|for the year|annual)\b", re.IGNORECASE)),
+    # "annual revenues", but not "its annual Prime Big Deal Days" (an event)
+    ("fullyear", re.compile(r"\b(?:full[\s-]year|fiscal year|for the year|(?<!trailing )twelve months"
+                            r"|annual(?!\s+(?-i:[A-Z])))\b", re.IGNORECASE)),
     # bare year ("2026 capital expenditures"): fiscal year for calendar-year filers; dates
     # ("September 30, 2025", "June 2026") are rejected in find_periods
     ("year", re.compile(r"\b(20\d\d)\b")),
@@ -250,6 +269,8 @@ def resolve_period(kind: str, g: tuple, fy: int, fp: str, *, forward: bool = Fal
         q = int(g[0])
         yr = g[1] or g[2]
         return (_year(yr) if yr else _infer_year(q, fy, fp, forward)), f"Q{q}"
+    if kind == "thisq":  # "For the quarter, net revenues grew 2%" under a "Quarterly/Full Year" heading
+        return (fy, fp) if fp != "FY" else None
     if kind == "next":
         cur = _pidx(fp)
         return (fy + 1, "Q1") if cur == 4 else (fy, f"Q{cur + 1}")
@@ -290,6 +311,8 @@ _EXTRA = {
     "cash flows from operations": "operating_cash_flow",
     "cash flow from operating activities": "operating_cash_flow",
     "net cash from operations": "operating_cash_flow",
+    "diluted net earnings per share": "eps_diluted",
+    "net earnings per diluted share": "eps_diluted",
     "gross margins": "gross_margin",
     "operating margins": "operating_margin",
 }
@@ -306,7 +329,7 @@ _NEUTRAL = {
     "total", "net", "gaap", "consolidated", "company", "company's", "quarterly",
     "record", "diluted", "fiscal", "full", "year", "full-year", "annual", "all-time", "overall",
     "strong", "higher", "lower", "first", "second", "third", "fourth", "quarter", "current",
-    "prior", "sequential",
+    "prior", "sequential", "all-in",
 }
 _VERB = re.compile(r"^(?:expect|anticipat|project|forecast|estimat|deliver|report|generat|post"
                    r"|achiev|record|see|saw|had|grew|grow|increas|decreas|reaffirm|rais|guid|target)\w*$")
@@ -362,8 +385,14 @@ def match_metrics(sentence: str) -> list[Mention]:
         prefix, after = sentence[:m.start()], sentence[m.end():m.end() + 40]
         if _qualified(prefix):
             metric = None
-        if re.match(r"\s+(?:in|from)\s+(?!the\b|fiscal\b|Q[1-4]\b)[A-Z]", after):
-            metric = None  # "Revenue in Intelligent Cloud"
+        if re.match(r"\s+(?:in|from|for)\s+(?!(?i:the|fiscal|fy|full|first|second|third|fourth|quarter|year)\b"
+                    r"|Q[1-4]\b)[A-Z]", after):
+            metric = None  # "Revenue in Intelligent Cloud", "Revenues for Converse"
+        acr = re.match(r"\s+and\s+([A-Z]{2,})\b", after)
+        if acr and acr[1].lower() not in SYNONYMS and acr[1] != "GAAP":
+            metric = None  # "Revenue and RPO Surpasses $20 Billion": a sum with a non-GAAP quantity
+        if metric == "net_income" and re.match(r"\s+per\b", after):
+            metric = None  # "net earnings per share": basic EPS, not net income
         if re.match(r"\s*(?:run[\s-]rate|backlog|mix|per\s+(?!share|diluted))", after, re.IGNORECASE):
             metric = None  # "revenue run-rate", "revenue per employee": other quantities
         window = " ".join(_TOKEN.findall(prefix)[-4:]) + " " + after[:14]
