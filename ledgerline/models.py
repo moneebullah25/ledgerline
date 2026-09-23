@@ -301,6 +301,8 @@ class MarketPrice(Base):
     volume: Mapped[int | None] = mapped_column(Numeric(20, 0))
     source_url: Mapped[str] = mapped_column(Text)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sha256: Mapped[str] = mapped_column(String(64))  # of the chart response the row came from
+    license_note: Mapped[str] = mapped_column(Text)
     __table_args__ = (UniqueConstraint("ticker", "day", name="uq_price"),)
 
 
@@ -315,6 +317,7 @@ class IngestFailure(Base):
     error: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (UniqueConstraint("flow", "key", "error_class", name="uq_ingest_failure"),)
 
 
 class EvalRun(Base):
@@ -323,5 +326,10 @@ class EvalRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     git_sha: Mapped[str | None] = mapped_column(String(40))
     layer: Mapped[str] = mapped_column(String(4))  # L1..L4
+    # Which eval of the layer (retrieval, ner, wer, forecast share L1). Defaults to the layer
+    # so writers that do not set it keep working.
+    name: Mapped[str] = mapped_column(
+        String(40), default=lambda ctx: ctx.get_current_parameters()["layer"])
     metrics: Mapped[dict] = mapped_column(JSONB)
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    __table_args__ = (Index("ix_eval_run_latest", "layer", "name", "created_at"),)

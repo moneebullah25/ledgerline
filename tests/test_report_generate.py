@@ -48,7 +48,7 @@ def seed_report(s, n_claims: int = 3, ticker: str = "AAPL") -> Report:
                   char_start=0, char_end=60, token_count=12,
                   text="Total net sales were $94,036 million for the quarter.")
     price = MarketPrice(ticker=ticker, day=date(2025, 8, 1), close=202.38, adj_close=202.38,
-                        source_url="https://example.com/prices", fetched_at=NOW)
+                        source_url="https://example.com/prices", **PROV)
     report = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q3", status="done",
                     latency_s=12.5, cost_usd=0.41, finished_at=NOW)
     s.add_all([fact, chunk, price, report])
