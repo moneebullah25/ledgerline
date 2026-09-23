@@ -37,7 +37,12 @@ from ledgerline.db import session
 from ledgerline.models import EvalRun
 from ledgerline.store import embed
 from ledgerline.store.retrieval import (
-    RERANK_DEPTH, _load, dense_ids, rrf, search, sparse_ids,
+    RERANK_DEPTH,
+    _load,
+    dense_ids,
+    rrf,
+    search,
+    sparse_ids,
 )
 from ledgerline.store.xbrl_query import get_xbrl_fact
 
@@ -46,11 +51,13 @@ N_CONSTRUCTED = 150
 
 # Per concept: phrasings; the last one of each avoids the concept's usual words.
 PHRASES: dict[str, list[str]] = {
-    "revenue": ["total net sales", "total revenue", "amount customers paid for products and services"],
+    "revenue": ["total net sales", "total revenue",
+                "amount customers paid for products and services"],
     "net_income": ["net income", "net earnings", "bottom-line profit after taxes"],
     "operating_income": ["operating income", "income from operations",
                          "profit from the core business before interest and taxes"],
-    "gross_profit": ["gross profit", "gross margin in dollars", "sales left after production costs"],
+    "gross_profit": ["gross profit", "gross margin in dollars",
+                     "sales left after production costs"],
     "cost_of_revenue": ["cost of sales", "cost of revenue", "what it cost to make what was sold"],
     "rd_expense": ["research and development expense", "R&D spending",
                    "spending on developing new technology"],
@@ -83,7 +90,8 @@ class Query:
 
 
 def _short_name(name: str) -> str:
-    return re.sub(r",?\s+(Inc\.?|Corporation|Corp\.?|Company|Co\.?)$", "", name, flags=re.I)
+    suffix = r",?\s+(Inc\.?|Corporation|Corp\.?|Company|Co\.?)$"
+    return re.sub(suffix, "", name, flags=re.IGNORECASE)
 
 
 def renderings(value: float, unit: str) -> list[str]:
@@ -209,17 +217,12 @@ def rankings(s: Session, q: Query, scope: list[int]) -> dict[str, list[int]]:
 
 
 def _table(queries: list[Query], ranks: list[dict[str, list[int]]]) -> dict:
-    out = {}
-    for system in ("sparse", "dense", "rrf", "rrf_rerank"):
-        out[system] = {
-            "recall_at_10": float(np.mean([recall_hit(r[system], q.relevant)
-                                           for q, r in zip(queries, ranks)])),
-            "recall_capped_at_10": float(np.mean([recall_capped(r[system], q.relevant)
-                                                  for q, r in zip(queries, ranks)])),
-            "ndcg_at_10": float(np.mean([ndcg10(r[system], q.relevant)
-                                         for q, r in zip(queries, ranks)])),
-        }
-    return out
+    metrics = {"recall_at_10": recall_hit, "recall_capped_at_10": recall_capped,
+               "ndcg_at_10": ndcg10}
+    return {system: {name: float(np.mean([f(r[system], q.relevant)
+                                          for q, r in zip(queries, ranks)]))
+                     for name, f in metrics.items()}
+            for system in ("sparse", "dense", "rrf", "rrf_rerank")}
 
 
 def run(write: bool = True) -> dict:

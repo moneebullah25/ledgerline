@@ -51,7 +51,8 @@ def _or_query(query: str) -> str:
 
 
 def _filters(filing_ids: list[int] | None) -> str:
-    return "f.company_id = :cid" + (" AND c.filing_id = ANY(:fids)" if filing_ids else "")
+    # [] means "no filings in scope" (returns nothing), not "no filter".
+    return "f.company_id = :cid" + ("" if filing_ids is None else " AND c.filing_id = ANY(:fids)")
 
 
 def sparse_ids(s: Session, query: str, company_id: int,

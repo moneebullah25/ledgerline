@@ -16,16 +16,18 @@ OVERLAP_TOKENS = 100
 # and model-free; the measured ratio against the real tokenizer is in the eval details.
 _TOKEN = re.compile(r"\w+|[^\w\s]")
 
-_PART = re.compile(r"^[ \t]*PART[ \t]+(IV|III|II|I)\b[ \t]*(?:[—–:.\-][^\n]*)?$", re.I | re.M)
+_PART = re.compile(r"^[ \t]*PART[ \t]+(IV|III|II|I)\b[ \t]*(?:[—–:.\-][^\n]*)?$",
+                   re.IGNORECASE | re.MULTILINE)
 # "Item 2. Title", "ITEM 1A — Title", or a bare "Item 2." with the title on the next line.
-_ITEM = re.compile(r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?([^\n]*)$", re.I | re.M)
+_ITEM = re.compile(r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?([^\n]*)$",
+                   re.IGNORECASE | re.MULTILINE)
 _MAX_HEADER_LINE = 200
 
 # 8-K press releases have no Item structure: a heading is a short, unpunctuated line directly
 # followed by a paragraph, or a financial-statement title.
 _STATEMENT_TITLE = re.compile(
     r"^(condensed |unaudited )*(consolidated )?(statements? of|balance sheets?|reconciliation)",
-    re.I,
+    re.IGNORECASE,
 )
 
 
@@ -155,9 +157,9 @@ def chunk_document(
     bounds = sections if sections and sections[0][0] == 0 else [(0, preamble)] + sections
     chunks: list[ChunkDraft] = []
     for (start, path), (end, _) in zip(bounds, bounds[1:] + [(len(text), "")]):
-        units = _units(text, start, end, max_tokens)
         if (start, path) in sections and "\n" not in text[start:end].strip():
             continue  # a bare header ("PART I — FINANCIAL INFORMATION") with no content
+        units = _units(text, start, end, max_tokens)
         i = 0
         while i < len(units):
             j, total = i, 0
