@@ -25,20 +25,26 @@ jobs:
     env:
       LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:ledgerline@localhost:5432/ledgerline
       LEDGERLINE_SEC_USER_AGENT: Ledgerline CI ci@example.com
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
-        with: {fetch-depth: 0}
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with: {fetch-depth: 0, persist-credentials: false}
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc  # v6.4.3
         with: {enable-cache: true}
       - run: uv sync --frozen --extra ml
       - run: uv run alembic upgrade head
       # Compare against the baseline on the base branch, so a PR cannot lower its own bar.
-      - run: git show "origin/${{ github.base_ref }}:ledgerline/evals/baseline.json" > "$RUNNER_TEMP/baseline.json"
+      # base_ref goes through env, never interpolated into the script (injection).
+      - run: git show "origin/${BASE_REF}:ledgerline/evals/baseline.json" > "$RUNNER_TEMP/baseline.json"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+      # The model key is visible to this step only, not to dependency installs or migrations.
       - id: gate
         run: uv run python -m ledgerline.evals.gate --baseline "$RUNNER_TEMP/baseline.json" --out eval-gate.md
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Post per-claim verdict diff
         if: always() && hashFiles('eval-gate.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file eval-gate.md --edit-last --create-if-none
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file eval-gate.md --edit-last --create-if-none

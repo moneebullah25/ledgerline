@@ -48,7 +48,7 @@ def main() -> None:
         } | {f"mase_{m}": float(np.mean([r[m] for r in rows])) for m in models}
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
                              check=False).stdout
-        s.add(EvalRun(git_sha=sha.strip() or None, layer="L1", metrics=metrics,
+        s.add(EvalRun(git_sha=sha.strip() or None, layer="L1", name="forecast", metrics=metrics,
                       details={"horizon": H, "holdout": HOLDOUT, "rows": rows,
                                "skipped": skipped}))
     print(metrics)

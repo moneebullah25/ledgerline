@@ -344,7 +344,7 @@ def run(write: bool = True) -> dict:
         if write:
             sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
                                  text=True).stdout.strip() or None
-            s.add(EvalRun(git_sha=sha, layer="L1", metrics=metrics, details=details))
+            s.add(EvalRun(git_sha=sha, layer="L1", name="retrieval", metrics=metrics, details=details))
     return {"metrics": metrics, **details}
 
 

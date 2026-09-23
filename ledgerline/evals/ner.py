@@ -156,7 +156,7 @@ def run(write: bool = True) -> dict:
 
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
         with session() as s:
-            s.add(EvalRun(git_sha=sha or None, layer="L1", metrics=metrics, details=details))
+            s.add(EvalRun(git_sha=sha or None, layer="L1", name="ner", metrics=metrics, details=details))
     return {"metrics": metrics, **details}
 
 

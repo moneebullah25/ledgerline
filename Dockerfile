@@ -18,6 +18,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Runtime: same Python base as the build stage so the venv's interpreter links resolve;
 # no uv, no build cache, no secrets (they arrive as environment variables at run time).
 FROM python:3.12-slim-bookworm
+ARG EXTRAS=""
+# The [ml] image decodes call/FOMC audio (ffmpeg) and FOMC transcript PDFs (pdftotext).
+RUN if [ "$EXTRAS" = "ml" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 WORKDIR /app
 COPY --from=build --chown=app:app /app /app

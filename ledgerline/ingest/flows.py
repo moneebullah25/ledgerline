@@ -66,13 +66,18 @@ def ingest_market_data(tickers: list[str] | None = None, start: date | None = No
 
 @flow(name="ingest_call_audio")
 def ingest_call_audio(path_or_url: str, kind: str, ticker: str | None = None,
-                      event_date: date | None = None, license_note: str = "") -> int | None:
+                      event_date: date | None = None, license_note: str = "",
+                      fiscal_year: int | None = None,
+                      fiscal_period: str | None = None) -> int | None:
+    """fiscal_year/fiscal_period tie an earnings call to its report quarter (the pipeline
+    selects calls by them)."""
     from ledgerline.ingest import call_audio  # owned by S2; imported late on purpose
 
     def run(s):
         company_id = s.scalar(select(Company.id).where(Company.ticker == ticker)) if ticker else None
         return call_audio.ingest_call_audio(s, path_or_url, kind=kind, company_id=company_id,
-                                            event_date=event_date, license_note=license_note)
+                                            event_date=event_date, license_note=license_note,
+                                            fiscal_year=fiscal_year, fiscal_period=fiscal_period)
     return guarded("ingest_call_audio", path_or_url, run)
 
 

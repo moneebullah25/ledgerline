@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: ledgerline
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ledgerline
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]  # loopback only
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ledgerline"]
@@ -15,10 +15,12 @@ services:
   api:
     build: .
     command: sh -c "alembic upgrade head && uvicorn ledgerline.api.main:app --host 0.0.0.0 --port 8000"
-    env_file: .env
+    # No env_file: the API never calls a model, so it never sees ANTHROPIC_API_KEY.
     environment:
       LEDGERLINE_DATABASE_URL: postgresql+psycopg://ledgerline:${POSTGRES_PASSWORD}@db:5432/ledgerline
-    ports: ["8000:8000"]
+      LEDGERLINE_SEC_USER_AGENT: ${LEDGERLINE_SEC_USER_AGENT:?set LEDGERLINE_SEC_USER_AGENT in .env}
+      LEDGERLINE_API_KEY: ${LEDGERLINE_API_KEY:-}  # unset: POST /v1/reports answers 503
+    ports: ["127.0.0.1:8000:8000"]  # loopback only; put a TLS proxy in front to expose it
     depends_on:
       db: {condition: service_healthy}
 
