@@ -10,6 +10,7 @@ import json
 import re
 import subprocess
 import tempfile
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -47,11 +48,8 @@ def parse_transcript(text: str) -> list[dict]:
             turns.append({"speaker": m[1], "text": line[m.end():]})
         elif turns:
             turns[-1]["text"] += " " + line
-    counts: dict[str, int] = {}
-    for t in turns:
-        if "CHAIR" not in t["speaker"]:
-            counts[t["speaker"]] = counts.get(t["speaker"], 0) + 1
-    moderator = max(counts, key=counts.get, default=None)
+    others = Counter(t["speaker"] for t in turns if "CHAIR" not in t["speaker"]).most_common(1)
+    moderator = others[0][0] if others else None
     for t in turns:
         t["role"] = ("executive" if "CHAIR" in t["speaker"]
                      else "operator" if t["speaker"] == moderator else "analyst")
