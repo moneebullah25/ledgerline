@@ -22,25 +22,25 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] A15 Tests with a stubbed `llm.structured`: adjudicator (bad then good; both bad -> IntegrityError; fabricated value rejected; label/stance mismatch), judge_llm (non-verbatim quote rejected, banned word), online critic. Refusal graph tests: xbrl insufficient + filing_rag supports -> no refusal and adjudicator called; forecast-only guidance path; qualitative (no xbrl) path through the graph; refusal text included in the vocabulary test; router cases value=0.0, guidance with one target field, negative change claim vs `mentions_value` abs().
 
 ## B. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `models.py` + ALL new migrations, compose, Dockerfile, Makefile, CI)
-- [ ] B1 `_deviation` reads `relative_error`; agent writes `deviation`. Read `deviation` (abs), delete the fallback; fix the test that seeds the wrong key. (pipeline.py:68-74, tests/test_report_generate.py:74)
-- [ ] B2 One claim's IntegrityError fails the whole report: catch per claim, persist as refused/unverifiable with the reason, continue. (pipeline.py:152-159)
-- [ ] B3 Report-time audit includes the verdict's own citation copy (`shown = cites + sources`): audit against resolved `sources` only. (report/generate.py:139)
-- [ ] B4 Evidence latency always 0: span names are `agent.<name>`; look up `latency.get(f"agent.{agent}", ...)`. Remove the duplicate `verify_claim` span in pipeline. (pipeline.py:89,100,151)
-- [ ] B5 `report.cost_usd` lost on crash: compute from sum(Verdict.cost_usd) (+ evidence) at finish and on failure.
-- [ ] B6 Worker stale sweep can double-run: heartbeat (`config.heartbeat_at`) refreshed after each claim commit; sweep keys off heartbeat.
-- [ ] B7 `/v1/evals/latest` shows one row per layer, hiding 3 of 4 L1 evals: add `eval_run.name` (migration 0004) and return latest per (layer, name); update writers only via a default so other modules keep working (name defaults to layer) — then set names in evals/*.py writers (retrieval, ner, wer, forecast: one-line edits OK).
-- [ ] B8 Auth: require an API key header (`LEDGERLINE_API_KEY`, fail closed if unset when POST is used) on POST /v1/reports; dedupe: return the existing queued/running/done report for the same (company, fy, fp) instead of inserting; cap queued reports.
-- [ ] B9 Cursor 500: `id_.isdigit()` accepts `²` and >4300-digit strings; use isascii()+isdigit() with a length bound / try-except -> 422. Empty cursor -> 422. Consistent 422 error shape (list form like FastAPI's). 202 gets a `Location` header. (api/main.py:241-243)
-- [ ] B10 Tracebacks exposed via `report.error` and span attrs: store an error class + short message for the API; keep traceback server-side (log). (pipeline.py:159, tracing.py:32)
-- [ ] B11 `market_price` provenance (FR-6): add sha256 + license_note (migration 0004), filled by ingest/market.py (one-line edit OK) with a Yahoo license note.
-- [ ] B12 `ingest_failure` unique (flow, key, error_class) in migration 0004 named `uq_ingest_failure` (group C switches record_failure to on_conflict).
-- [ ] B13 Compose: bind db and api ports to 127.0.0.1; api container must not get ANTHROPIC_API_KEY (worker only); `.env.example` POSTGRES_PASSWORD empty so `:?` fails closed.
+- [x] B1 `_deviation` reads `relative_error`; agent writes `deviation`. Read `deviation` (abs), delete the fallback; fix the test that seeds the wrong key. (pipeline.py:68-74, tests/test_report_generate.py:74)
+- [x] B2 One claim's IntegrityError fails the whole report: catch per claim, persist as refused/unverifiable with the reason, continue. (pipeline.py:152-159)
+- [x] B3 Report-time audit includes the verdict's own citation copy (`shown = cites + sources`): audit against resolved `sources` only. (report/generate.py:139)
+- [x] B4 Evidence latency always 0: span names are `agent.<name>`; look up `latency.get(f"agent.{agent}", ...)`. Remove the duplicate `verify_claim` span in pipeline. (pipeline.py:89,100,151)
+- [x] B5 `report.cost_usd` lost on crash: compute from sum(Verdict.cost_usd) (+ evidence) at finish and on failure.
+- [x] B6 Worker stale sweep can double-run: heartbeat (`config.heartbeat_at`) refreshed after each claim commit; sweep keys off heartbeat.
+- [x] B7 `/v1/evals/latest` shows one row per layer, hiding 3 of 4 L1 evals: add `eval_run.name` (migration 0004) and return latest per (layer, name); update writers only via a default so other modules keep working (name defaults to layer) — then set names in evals/*.py writers (retrieval, ner, wer, forecast: one-line edits OK).
+- [x] B8 Auth: require an API key header (`LEDGERLINE_API_KEY`, fail closed if unset when POST is used) on POST /v1/reports; dedupe: return the existing queued/running/done report for the same (company, fy, fp) instead of inserting; cap queued reports.
+- [x] B9 Cursor 500: `id_.isdigit()` accepts `²` and >4300-digit strings; use isascii()+isdigit() with a length bound / try-except -> 422. Empty cursor -> 422. Consistent 422 error shape (list form like FastAPI's). 202 gets a `Location` header. (api/main.py:241-243)
+- [x] B10 Tracebacks exposed via `report.error` and span attrs: store an error class + short message for the API; keep traceback server-side (log). (pipeline.py:159, tracing.py:32)
+- [x] B11 `market_price` provenance (FR-6): add sha256 + license_note (migration 0004), filled by ingest/market.py (one-line edit OK) with a Yahoo license note.
+- [x] B12 `ingest_failure` unique (flow, key, error_class) in migration 0004 named `uq_ingest_failure` (group C switches record_failure to on_conflict).
+- [x] B13 Compose: bind db and api ports to 127.0.0.1; api container must not get ANTHROPIC_API_KEY (worker only); `.env.example` POSTGRES_PASSWORD empty so `:?` fails closed.
 - [ ] B14 CI: eval-gate — scope ANTHROPIC_API_KEY to the gate step, `persist-credentials: false`, pin actions to commit SHAs, pass base_ref via env; ci.yml top-level `permissions: contents: read`, persist-credentials false; ruff must pass on the whole repo (fix lint across repo at the end, coordinate last).
-- [ ] B15 Dockerfile worker image: install ffmpeg + poppler-utils (pdftotext) when EXTRAS includes ml.
-- [ ] B16 FY reports always fail (releases labelled Q4): map --fp FY to the Q4 release, or reject FY with a clear 422/CLI error. Makefile backfill includes audio (FOMC eval set) and `make evals` runs all evals. Call-audio flow must pass fiscal_year/period (ingest/flows.py).
-- [ ] B17 Offline mode is silent: report view shows `mode: offline (no LLM credentials)` when verdict.model is NULL.
-- [ ] B18 Perf test `test_nfr2_report_p95`: mark `perf`, excluded by default, still runnable.
-- [ ] B19 NFR-3/NFR-1: record and surface cost and latency per report in the report view; warn when over $3.00 / 20 min.
+- [x] B15 Dockerfile worker image: install ffmpeg + poppler-utils (pdftotext) when EXTRAS includes ml.
+- [x] B16 FY reports always fail (releases labelled Q4): map --fp FY to the Q4 release, or reject FY with a clear 422/CLI error. Makefile backfill includes audio (FOMC eval set) and `make evals` runs all evals. Call-audio flow must pass fiscal_year/period (ingest/flows.py).
+- [x] B17 Offline mode is silent: report view shows `mode: offline (no LLM credentials)` when verdict.model is NULL.
+- [x] B18 Perf test `test_nfr2_report_p95`: mark `perf`, excluded by default, still runnable.
+- [x] B19 NFR-3/NFR-1: record and surface cost and latency per report in the report view; warn when over $3.00 / 20 min.
 
 ## C. Ingest + test infrastructure (`ledgerline/ingest/**` except market.py one-liner, `tests/conftest.py`, `config.py`, `tests/test_ingest_*`)
 - [ ] C1 conftest: per-session test database name (pid/uuid suffix), drop it at session end; force `LEDGERLINE_LLM_ENABLED=false` by assignment and delete ANTHROPIC_API_KEY/AUTH_TOKEN (autouse); resolve .env/alembic.ini relative to the repo root; skip cleanly if Postgres is unreachable or CREATEDB is denied; `pytest.importorskip` in ml tests.
