@@ -3,9 +3,8 @@
 Revision ID: 0001
 Revises: None
 """
-from alembic import op
 import sqlalchemy as sa
-import pgvector.sqlalchemy
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0001"

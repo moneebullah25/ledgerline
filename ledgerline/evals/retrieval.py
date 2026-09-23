@@ -219,9 +219,9 @@ def constructed_queries(s: Session, n: int = N_CONSTRUCTED, seed: int = SEED) ->
                 continue
             by_company[f.company_id][concept].append(Query(
                 "constructed", f.company_id, "", relevant,
-                dict(filing_id=f.id, concept=concept, fiscal_year=f.fiscal_year,
-                     fiscal_period=fp, value=fact.value, fact_ids=list(fact.fact_ids),
-                     name=_short_name(f.name), form=f.form_type, end=f.period_of_report)))
+                {"filing_id": f.id, "concept": concept, "fiscal_year": f.fiscal_year,
+                 "fiscal_period": fp, "value": fact.value, "fact_ids": list(fact.fact_ids),
+                 "name": _short_name(f.name), "form": f.form_type, "end": f.period_of_report}))
 
     # Stratify: per company, shuffle each concept's candidates and interleave concepts in a
     # shuffled order; then round-robin over companies until n.
@@ -260,7 +260,7 @@ def qualitative_queries(s: Session) -> list[Query]:
         if company_id is None or not rows:
             raise ValueError(f"qualitative query has no relevant chunks: {ticker} {query!r}")
         out.append(Query("qualitative", company_id, query, {r[0] for r in rows},
-                         dict(ticker=ticker, predicate=predicate)))
+                         {"ticker": ticker, "predicate": predicate}))
     return out
 
 
@@ -342,9 +342,10 @@ def run(write: bool = True) -> dict:
                         for q, r in zip(queries, ranks)],
         }
         if write:
-            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, check=False,
                                  text=True).stdout.strip() or None
-            s.add(EvalRun(git_sha=sha, layer="L1", name="retrieval", metrics=metrics, details=details))
+            s.add(EvalRun(git_sha=sha, layer="L1", name="retrieval", metrics=metrics,
+                          details=details))
     return {"metrics": metrics, **details}
 
 

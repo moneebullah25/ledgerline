@@ -41,9 +41,9 @@ def index_filing(s: Session, filing_id: int) -> int:
             for d in drafts
         ])
         rows = [
-            dict(filing_id=filing_id, chunk_index=d.chunk_index, section_path=d.section_path,
-                 char_start=d.char_start, char_end=d.char_end, text=d.text,
-                 token_count=d.token_count, embedding=v)
+            {"filing_id": filing_id, "chunk_index": d.chunk_index, "section_path": d.section_path,
+             "char_start": d.char_start, "char_end": d.char_end, "text": d.text,
+             "token_count": d.token_count, "embedding": v}
             for d, v in zip(drafts, vectors)
         ]
         stmt = insert(Chunk).values(rows)

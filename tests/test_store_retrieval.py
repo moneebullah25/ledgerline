@@ -47,7 +47,8 @@ def test_index_and_search(db, monkeypatch):
     co = Company(cik="0000000001", ticker="TST", name="Test Co")
     db.add(co)
     db.flush()
-    prov = dict(source_url="x", fetched_at=datetime.now(UTC), sha256="0" * 64, license_note="t")
+    prov = {"source_url": "x", "fetched_at": datetime.now(UTC), "sha256": "0" * 64,
+            "license_note": "t"}
     f = Filing(company_id=co.id, accession_no="0000000001-26-000001", form_type="10-Q",
                filed_at=date(2026, 7, 31), doc_url="x", storage_path="x", **prov)
     db.add(f)

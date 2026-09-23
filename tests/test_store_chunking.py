@@ -1,3 +1,4 @@
+import itertools
 from pathlib import Path
 
 from ledgerline.store.chunking import _periodic_sections, chunk_document
@@ -30,8 +31,9 @@ def test_chunks_never_cross_sections_and_overlap_within_them():
     chunks = chunk_document(TEN_Q, "10-Q", max_tokens=60, overlap=15)
     for c in chunks:
         # every chunk lies strictly inside one [boundary, next boundary) interval
-        assert any(a <= c.char_start and c.char_end <= b for a, b in zip(bounds, bounds[1:]))
-    same_section = [(a, b) for a, b in zip(chunks, chunks[1:]) if a.section_path == b.section_path]
+        assert any(a <= c.char_start and c.char_end <= b for a, b in itertools.pairwise(bounds))
+    same_section = [(a, b) for a, b in itertools.pairwise(chunks)
+                    if a.section_path == b.section_path]
     assert same_section and any(b.char_start < a.char_end for a, b in same_section)
     assert all(b.char_start > a.char_start for a, b in same_section)  # always progresses
 

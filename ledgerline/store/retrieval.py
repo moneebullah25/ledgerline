@@ -66,7 +66,7 @@ def sparse_ids(s: Session, query: str, company_id: int,
              websearch_to_tsquery('english', :q) q
         WHERE {_filters(filing_ids)} AND c.tsv @@ q
         ORDER BY ts_rank(c.tsv, q) DESC, c.id LIMIT :n"""
-    params = dict(q=_or_query(query), cid=company_id, n=n, fids=filing_ids)
+    params = {"q": _or_query(query), "cid": company_id, "n": n, "fids": filing_ids}
     return list(s.scalars(text(sql), params))
 
 
@@ -81,7 +81,7 @@ def dense_ids(s: Session, qvec, company_id: int,
         SELECT c.id FROM chunk c JOIN filing f ON f.id = c.filing_id
         WHERE {_filters(filing_ids)} AND c.embedding IS NOT NULL
         ORDER BY c.embedding <=> CAST(:q AS vector) LIMIT :n"""
-    params = dict(q=str(list(map(float, qvec))), cid=company_id, n=n, fids=filing_ids)
+    params = {"q": str(list(map(float, qvec))), "cid": company_id, "n": n, "fids": filing_ids}
     return list(s.scalars(text(sql), params))
 
 
