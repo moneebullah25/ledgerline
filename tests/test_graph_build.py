@@ -4,11 +4,12 @@ from threading import Lock
 
 import pytest
 
+from ledgerline import llm
 from ledgerline.graph import adjudicator, build, critic
 from ledgerline.graph.state import Ctx
-from ledgerline.llm import OFFLINE
+from ledgerline.llm import OFFLINE, Usage
 from ledgerline.models import Claim
-from ledgerline.schemas import Citation, EvidenceItem
+from ledgerline.schemas import Citation, CriticOutput, EvidenceItem, VerdictDraft
 from ledgerline.tracing import Tracer
 
 CLAIM = Claim(id=7, company_id=1, fiscal_year=2025, fiscal_period="Q1", text="revenue of $94.9 billion",
@@ -105,9 +106,11 @@ def test_audit_flags_each_banned_word(word):
     assert adjudicator.audit(f"This is {word}.", [], "")
 
 
-def test_generated_text_never_uses_banned_words():
+def test_generated_text_never_uses_banned_words(fakes):
     """Every offline template: critic arguments, refusal and adjudicator rationales."""
     texts = list(critic.ARGUMENTS.values())
+    fakes(xbrl_table=ev("xbrl_table", "insufficient"), filing_rag=ev("filing_rag", "insufficient"))
+    texts.append(build.verify_claim(None, CLAIM, Tracer()).verdict.rationale)
     for stance in ("supports", "contradicts"):
         for agent, cites, payload in [
             ("xbrl_table", [FACT], {"periods": [[2025, "Q1"]], "derived": True}),
@@ -128,3 +131,125 @@ def test_xbrl_dominates_numeric_and_dissent_lowers_confidence():
     v2, _ = adjudicator.adjudicate(CLAIM, both, critic.critique(CLAIM, both)[0])
     assert v1.label == v2.label == "supported"
     assert v2.confidence < v1.confidence
+
+
+GUIDANCE = Claim(id=8, company_id=1, fiscal_year=2025, fiscal_period="Q1", claim_type="guidance",
+                 text="revenue between $89 billion and $93 billion", span_start=0, span_end=1,
+                 filing_id=1, metric="revenue", value=89e9, value_high=93e9, unit="USD",
+                 target_fiscal_year=2025, target_fiscal_period="Q2")
+FORECAST = [Citation(kind="forecast", ref_id=f"revenue:2025Q2:ensemble:{k}", value=v, unit="USD")
+            for k, v in (("point", 91e9), ("lo90", 86e9), ("hi90", 96e9))]
+CHUNK = Citation(kind="chunk", ref_id=3, quote="Net sales were $94.9 billion.")
+
+
+def test_filing_rag_support_prevents_refusal_when_xbrl_is_insufficient(fakes, monkeypatch):
+    calls = []
+    real = adjudicator.adjudicate
+    monkeypatch.setattr(adjudicator, "adjudicate", lambda *a: calls.append(1) or real(*a))
+    fakes(xbrl_table=ev("xbrl_table", "insufficient"),
+          filing_rag=ev("filing_rag", "supports", [CHUNK], margin=0.9, section="MD&A"))
+    r = build.verify_claim(None, CLAIM, Tracer())
+    assert calls == [1] and not r.refused
+    assert r.verdict.label == "supported" and r.verdict.confidence <= 0.6  # NLI on a number
+
+
+def test_forecast_only_guidance_is_capped_at_unverifiable(fakes):
+    fakes(forecast=ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5}, edge=0.4),
+          filing_rag=ev("filing_rag", "insufficient"))
+    r = build.verify_claim(None, GUIDANCE, Tracer())
+    assert not r.refused and r.verdict.label == "unverifiable"
+    assert {c.kind for c in r.verdict.citations} == {"forecast"}  # still visible
+    assert "86.00 billion" in r.verdict.rationale
+
+
+def test_qualitative_claim_through_the_graph(fakes):
+    claim = Claim(id=9, company_id=1, fiscal_year=2025, fiscal_period="Q1", filing_id=1,
+                  claim_type="qualitative", text="Services grew strongly", span_start=0,
+                  span_end=1)
+    quote = Citation(kind="chunk", ref_id=4, quote="Services grew strongly.")
+    fakes(filing_rag=ev("filing_rag", "supports", [quote], margin=0.5, section="MD&A"))
+    t = Tracer()
+    r = build.verify_claim(None, claim, t)
+    assert r.verdict.label == "supported" and [e.agent for e in r.evidence] == ["filing_rag"]
+    assert "agent.xbrl_table" not in {s.name for s in t.spans}
+
+
+# ---- online adjudicator with a stubbed llm.structured
+
+XBRL = ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]])
+USAGE = Usage("claude-opus-5", 100, 10)
+
+
+@pytest.fixture
+def online(monkeypatch):
+    """Queue model outputs; returns the list of instructions the model received."""
+    seen = []
+
+    def install(*outputs):
+        queue = list(outputs)
+        monkeypatch.setattr(llm, "available", lambda: True)
+
+        def structured(tier, system, data, instruction, schema):
+            seen.append((instruction, data))
+            return queue.pop(0), USAGE
+        monkeypatch.setattr(llm, "structured", structured)
+        return seen
+    return install
+
+
+def V(label="supported", rationale="Supported by filed revenue of 94.93 billion USD.", cites=(FACT,)):
+    return VerdictDraft(label=label, confidence=0.9, rationale=rationale, citations=list(cites))
+
+
+def test_online_bad_then_good(online):
+    seen = online(V(rationale="Revenue was 97.2 billion.", cites=[FACT]), V())
+    v, u = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert v.label == "supported" and u.input_tokens == 200
+    instruction, data = seen[1]
+    assert "97.2" not in instruction and "uncited numbers" in instruction
+    assert "97.2" in data["rejected_answer_problems"]
+
+
+def test_online_both_bad_raises_with_usage(online):
+    bad = V(rationale="The claim is misleading.")
+    online(bad, bad)
+    with pytest.raises(adjudicator.IntegrityError, match="banned") as exc:
+        adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert exc.value.usage.input_tokens == 200
+
+
+def test_online_fabricated_citation_value_is_replaced_and_caught(online):
+    fake = Citation(kind="xbrl_fact", ref_id=11, value=97.2e9, unit="USD")
+    unknown = Citation(kind="xbrl_fact", ref_id=999, value=1.0)
+    online(V(rationale="Filed revenue was 97.2 billion USD.", cites=[fake]),
+           V(cites=[fake, unknown, fake]))
+    v, _ = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert v.citations == [FACT]  # the evidence's copy; unknown dropped; deduped
+
+
+def test_online_label_must_match_deciding_stance(online):
+    seen = online(V(label="contradicted"), V(label="contradicted"))
+    v, u = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert len(seen) == 2 and "label mismatch" in seen[1][0]
+    assert v.label == "supported" and "94.93 billion" in v.rationale  # offline rule
+    assert u.model == "claude-opus-5"
+
+
+def test_online_forecast_only_must_be_unverifiable(online):
+    online(V(label="supported", cites=FORECAST[:1], rationale="Consistent with history."),
+           V(label="unverifiable", cites=FORECAST[:1], rationale="Consistent with history only."))
+    forecast = ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5})
+    v, _ = adjudicator.adjudicate(GUIDANCE, [forecast], None)
+    assert v.label == "unverifiable"
+
+
+def test_online_critic_retries_on_uncited_number_then_raises(online):
+    online(CriticOutput(counter_stance="contradicts", argument="Revenue was really 97.2 billion."),
+           CriticOutput(counter_stance="contradicts", argument="The fact is derived."))
+    out, _ = critic.critique(CLAIM, [XBRL])
+    assert out.argument == "The fact is derived."
+    bad = CriticOutput(counter_stance="contradicts", argument="This is a lie.")
+    online(bad, bad)
+    with pytest.raises(adjudicator.IntegrityError) as exc:
+        critic.critique(CLAIM, [XBRL])
+    assert exc.value.usage is not None

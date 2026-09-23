@@ -114,3 +114,29 @@ def test_forecast_on_seasonal_series():
     assert ev.stance == "supports"
     claim.value = 400.0
     assert forecast.assess(claim, hist).stance == "contradicts"
+
+
+# ---- filing RAG, online judgment with a stubbed llm.structured
+
+def _judge(monkeypatch, **j):
+    from ledgerline import llm
+    out = filing_rag._Judgment(**({"stance": "supports", "passage": 0,
+                                   "quote": "Services grew strongly.", "summary": "supports"} | j))
+    monkeypatch.setattr(llm, "structured", lambda *a, **k: (out, llm.OFFLINE))
+    return filing_rag.judge_llm(C(text="Services grew strongly", claim_type="qualitative"), [HIT])[0]
+
+
+def test_judge_llm_accepts_verbatim_quote(monkeypatch):
+    ev = _judge(monkeypatch)
+    assert ev.stance == "supports" and ev.citations[0].quote == "Services grew strongly."
+
+
+def test_judge_llm_rejects_non_verbatim_quote(monkeypatch):
+    assert _judge(monkeypatch, quote="Services grew very strongly.").stance == "insufficient"
+    assert _judge(monkeypatch, passage=5).stance == "insufficient"
+
+
+def test_judge_llm_summary_is_audited(monkeypatch):
+    assert "false" not in _judge(monkeypatch, summary="The claim is false.").summary
+    ev = _judge(monkeypatch, summary="Services grew 40% to $31 billion.")  # uncited numbers
+    assert ev.stance == "supports" and ev.summary == "Judgment on the retrieved passages: supports."

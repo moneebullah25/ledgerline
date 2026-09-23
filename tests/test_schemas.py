@@ -23,3 +23,22 @@ def test_verdict_must_cite_unless_unverifiable():
 def test_claim_draft_rejects_value_without_unit():
     with pytest.raises(ValidationError):
         ClaimDraft(text="rev 5", span_start=0, span_end=5, claim_type="reported_result", value=5)
+
+
+@pytest.mark.parametrize("text", [
+    "Revenue was $25 billion.", "Capex was $2,050 million.", "Sales grew 12%.",
+    "Margin rose 3 points.", "Revenue reached 2050 million USD.", "A $ 7 charge.",
+])
+def test_amounts_are_not_exempt_as_ordinals_or_years(text):
+    assert uncited_numbers(text, []) != []
+
+
+def test_bare_ordinals_and_years_stay_exempt():
+    assert uncited_numbers("In fiscal 2025 Q3, 4 agents ran over 12 months.", []) == []
+
+
+def test_negative_cited_value_may_print_as_magnitude():
+    loss = [Citation(kind="xbrl_fact", ref_id=1, value=-2_100_000_000.0, unit="USD")]
+    assert uncited_numbers("Net loss of $2.1 billion.", loss) == []
+    assert uncited_numbers("Net income of -2.10 billion USD.", loss) == []
+    assert uncited_numbers("Net loss of $2.4 billion.", loss) == [2.4]

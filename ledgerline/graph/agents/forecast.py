@@ -127,7 +127,8 @@ def assess(claim: Claim, hist: list[Fact]) -> EvidenceItem:
     if len(y) < HOLDOUT + MIN_TRAIN + h - 1:
         return _insufficient("quarterly history too short for a held-out skill check",
                              history_len=len(y))
-    if claim.comparison is None and claim.unit != CONCEPTS[claim.metric].unit:
+    unit = CONCEPTS[claim.metric].unit
+    if claim.unit not in ((unit,) if claim.comparison is None else ("percent", unit)):
         return _insufficient(f"claim unit {claim.unit} does not match {claim.metric}")
     lo = float(claim.value)
     hi = float(claim.value_high) if claim.value_high is not None else lo
@@ -136,12 +137,11 @@ def assess(claim: Claim, hist: list[Fact]) -> EvidenceItem:
         if back < h:
             return _insufficient("base quarter of the guided change is not yet reported")
         base = y[len(y) - 1 - (back - h)]
-        pct = CONCEPTS[claim.metric].unit != "percent"
+        pct = claim.unit == "percent" and unit != "percent"
         lo, hi = ((base * (1 + v / 100) if pct else base + v) for v in (lo, hi))
     skill = backtest(y, h)
     f = forecast_all(y, h)["ensemble"]
     point, flo, fhi = (float(a[-1]) for a in f)
-    unit = CONCEPTS[claim.metric].unit
     ref = f"{claim.metric}:{claim.target_fiscal_year}{claim.target_fiscal_period}:ensemble"
     cites = [Citation(kind="forecast", ref_id=f"{ref}:{k}", value=v, unit=unit)
              for k, v in (("point", point), ("lo90", flo), ("hi90", fhi))]

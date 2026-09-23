@@ -44,6 +44,11 @@ CASES = [
      ["forecast", "filing_rag"]),  # no target period: cannot be matched to a report
     (C(claim_type="guidance", metric=None, value=None), E, None,
      ["filing_rag", "market_reaction"]),
+    (C(metric="net_income", value=0.0, unit="USD"), None, None, ["xbrl_table", "filing_rag"]),
+    (C(claim_type="guidance", metric="revenue", value=89e9, unit="USD",
+       target_fiscal_year=2025), None, (2026, "Q1"), ["forecast", "filing_rag"]),
+    (C(claim_type="guidance", metric="revenue", value=89e9, unit="USD",
+       target_fiscal_period="Q2"), None, (2026, "Q1"), ["forecast", "filing_rag"]),
 ]
 
 

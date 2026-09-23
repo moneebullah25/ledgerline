@@ -14,8 +14,14 @@ def C(text, value, unit="USD", metric="revenue", **kw) -> Claim:
     return Claim(**(base | {"text": text, "value": value, "unit": unit, "metric": metric} | kw))
 
 
-def F(value, fy=2025, fp="Q1", concept="revenue", ids=(11,), derived=False) -> Fact:
-    return Fact(value, "USD", ids, concept, fy, fp, date(2025, 3, 29), derived, "u")
+def F(value, fy=2025, fp="Q1", concept="revenue", ids=(11,), derived=False, unit="USD",
+      components=()) -> Fact:
+    return Fact(value, unit, ids, concept, fy, fp, date(2025, 3, 29), derived, "u", components)
+
+
+def margin(gp, rev, fy=2025, ids=(1, 2)) -> Fact:
+    parts = (F(gp, fy, concept="gross_profit", ids=ids[:1]), F(rev, fy, ids=ids[1:]))
+    return F(gp / rev * 100, fy, concept="gross_margin", ids=ids, unit="percent", components=parts)
 
 
 def test_half_ulp_follows_printed_digits():
@@ -56,15 +62,63 @@ def test_comparison_percent_change():
     base, cur = F(100e9, fy=2024, ids=(1,)), F(106.3e9, ids=(2,))
     ev = assess(claim, [cur, base])
     assert ev.stance == "supports"  # 6.3% rounds to "6%" within 0.5 + 0.1 pp
-    assert {c.ref_id for c in ev.citations} == {1, 2}
+    assert {c.ref_id for c in ev.citations if c.kind == "xbrl_fact"} == {1, 2}
+    change = next(c for c in ev.citations if c.ref_id == "revenue:2025Q1:yoy_change")
+    assert (change.kind, change.unit) == ("computed", "percent")
+    assert change.value == pytest.approx(6.3)
     assert assess(claim, [F(107e9, ids=(2,)), base]).stance == "contradicts"  # 7.0%
 
 
 def test_margin_change_is_in_points():
     claim = C("gross margin up 1.2 points", 1.2, unit="percent", metric="gross_margin",
               claim_type="comparison", comparison="yoy")
-    ev = assess(claim, [F(46.3, concept="gross_margin"), F(45.1, fy=2024, concept="gross_margin")])
+    ev = assess(claim, [margin(46.3, 100), margin(45.1, 100, fy=2024, ids=(3, 4))])
     assert ev.stance == "supports"
+
+
+def test_margin_cites_components_with_their_own_values():
+    claim = C("gross margin of 46.3%", 46.3, unit="percent", metric="gross_margin")
+    ev = assess(claim, [margin(43.9e9, 94.9e9)])
+    facts = {c.ref_id: (c.value, c.unit) for c in ev.citations if c.kind == "xbrl_fact"}
+    assert facts == {1: (43.9e9, "USD"), 2: (94.9e9, "USD")}
+    ratio = next(c for c in ev.citations if c.ref_id == "gross_margin:2025Q1")
+    assert ratio.kind == "computed" and ratio.value == pytest.approx(46.26, abs=0.01)
+    assert not ev.payload["derived"]  # computed, not derived from YTD
+
+
+def test_percent_level_uses_points_not_relative_tolerance():
+    claim = C("gross margin of 46%", 46.0, unit="percent", metric="gross_margin")
+    assert assess(claim, [margin(46.55, 100)]).stance == "supports"  # 0.55 <= 0.5 + 0.1
+    assert assess(claim, [margin(46.65, 100)]).stance == "contradicts"  # was ok at 0.5% rel
+
+
+def test_usd_change_tolerance_scales_with_both_values():
+    claim = C("revenue increased $1.0 billion", 1.0e9, claim_type="comparison", comparison="yoy")
+    ev = assess(claim, [F(101.3e9), F(100e9, fy=2024, ids=(1,))])  # actual change 1.3e9
+    assert ev.payload["tolerance"] == pytest.approx(0.005 * 201.3e9 + 0.05e9)
+    assert ev.stance == "supports"
+
+
+def test_comparison_unit_must_be_percent_or_concept_unit():
+    claim = C("revenue up 5 per share", 5.0, unit="USD/share", claim_type="comparison",
+              comparison="yoy")
+    assert assess(claim, [F(105e9), F(100e9, fy=2024)]).stance == "insufficient"
+
+
+def test_half_ulp_prefers_percent_tokens_for_percent_claims():
+    text = "revenue of $5.0 billion, up 5%"
+    assert printed_half_ulp(text, 5.0) == pytest.approx(0.05)
+    assert printed_half_ulp(text, 5.0, "percent") == pytest.approx(0.5)
+
+
+def test_net_loss_claim_is_compared_with_negative_fact():
+    loss = C("net loss of $2.1 billion", 2.1e9, metric="net_income")
+    assert assess(loss, [F(-2.1e9, concept="net_income")]).stance == "supports"
+    assert assess(loss, [F(2.1e9, concept="net_income")]).stance == "contradicts"
+    income = C("net income of $2.1 billion", 2.1e9, metric="net_income")
+    assert assess(income, [F(-2.1e9, concept="net_income")]).stance == "contradicts"
+    op = C("operating loss of $300 million", 300e6, metric="operating_income")
+    assert assess(op, [F(-301e6, concept="operating_income")]).stance == "supports"
 
 
 def test_comparison_periods():
@@ -84,3 +138,6 @@ def test_mentions_value_any_scale():
     assert mentions_value("Revenue increased 18% from the prior quarter.", pct)
     assert not mentions_value("repurchases in compliance with Rule 10b-18.", pct)
     assert not mentions_value("an unfavorable impact of 5.9 million units", pct)
+    fell = C("revenue fell 5% year over year", -5.0, unit="percent", claim_type="comparison",
+             comparison="yoy")
+    assert mentions_value("Revenue decreased 5% compared with last year.", fell)

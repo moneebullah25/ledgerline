@@ -11,6 +11,8 @@ its deterministic offline implementation instead. Nothing here fabricates a resp
 """
 
 import os
+import re
+import secrets
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -56,6 +58,15 @@ def available() -> bool:
     )
 
 
+_TAG = re.compile(r"<(/?)(document)", re.IGNORECASE)
+
+
+def _neutralise(text: str) -> str:
+    """Untrusted text cannot open or close a data block: any <document... / </document...
+    inside it (which also covers the per-call tag) loses its angle bracket."""
+    return _TAG.sub(r"&lt;\1\2", text)
+
+
 @lru_cache
 def _client():
     import anthropic
@@ -68,11 +79,13 @@ def structured[T: BaseModel](
     max_tokens: int = 4000,
 ) -> tuple[T, Usage]:
     """One schema-constrained call. `data` maps a label to untrusted text; each is wrapped
-    in its own <document> block so instructions inside it are read as content, not commands.
+    in its own <document-NONCE> block (a fresh random tag per call, never guessable by the
+    text) so instructions inside it are read as content, not commands. Labels are ours.
     Raises ValueError if the model refuses or the output does not validate."""
     model = TIERS[tier]
+    tag = f"document-{secrets.token_hex(8)}"
     docs = "\n".join(
-        f'<document label="{label}">\n{text}\n</document>' for label, text in data.items()
+        f'<{tag} label="{label}">\n{_neutralise(text)}\n</{tag}>' for label, text in data.items()
     )
     resp = _client().messages.parse(
         model=model,

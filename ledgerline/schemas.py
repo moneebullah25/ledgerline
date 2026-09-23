@@ -48,7 +48,9 @@ class ClaimDraft(BaseModel):
 
 
 class Citation(BaseModel):
-    kind: Literal["xbrl_fact", "chunk", "price", "forecast", "segment"]
+    # "computed": a value the verifier derived from cited facts (a margin, a change); its
+    # ref_id names the computation and the component facts are cited alongside it.
+    kind: Literal["xbrl_fact", "chunk", "price", "forecast", "segment", "computed"]
     ref_id: int | str
     quote: str | None = None  # exact text span for chunk/segment citations
     value: float | None = None  # the number this citation contributes, if any
@@ -94,8 +96,12 @@ class VerdictDraft(BaseModel):
         return self
 
 
-# Integers < 32 are allowed bare: they are ordinals and counts in prose ("Q3", "4 agents").
 _NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
+# A number next to one of these is an amount, never an ordinal or a year.
+_UNIT_BEFORE = re.compile(r"\$\s?$")
+_UNIT_AFTER = re.compile(
+    r"\s?(?:%|(?:percent|per cent|percentage|points?|pp|bps|basis|thousand|million|billion"
+    r"|trillion|usd|bn|mn|[kmb])\b)", re.IGNORECASE)
 _SMALL = 32
 
 
@@ -105,12 +111,22 @@ def numbers_in(text: str) -> list[float]:
 
 def _renderings(v: float) -> set[float]:
     """The ways a cited value can legitimately appear in prose: raw, or in thousands,
-    millions, or billions, rounded to what a writer would print."""
+    millions, or billions, rounded to what a writer would print. A negative value may also
+    be printed as its magnitude ("net loss of $2.1 billion")."""
     out = set()
-    for scale in (1, 1e3, 1e6, 1e9):
-        x = v / scale
-        out |= {round(x, 0), round(x, 1), round(x, 2), round(x, 3)}
+    for x0 in {v, abs(v)}:
+        for scale in (1, 1e3, 1e6, 1e9):
+            x = x0 / scale
+            out |= {round(x, 0), round(x, 1), round(x, 2), round(x, 3)}
     return out
+
+
+def _bare_ordinal_or_year(n: float, text: str, start: int, end: int) -> bool:
+    """Integers < 32 ("Q3", "4 agents") and fiscal years pass without a citation, but only
+    when no currency, percent, or scale word marks them as an amount ("$25 billion")."""
+    if not n.is_integer() or not (abs(n) < _SMALL or 1990 <= n <= 2100):
+        return False
+    return not (_UNIT_BEFORE.search(text[:start]) or _UNIT_AFTER.match(text, end))
 
 
 def uncited_numbers(text: str, citations: list[Citation], claim_text: str = "") -> list[float]:
@@ -125,9 +141,10 @@ def uncited_numbers(text: str, citations: list[Citation], claim_text: str = "") 
             allowed |= _renderings(c.value)
         if c.quote:
             allowed |= set(numbers_in(c.quote))
-    return [
-        n for n in numbers_in(text)
-        if not (n.is_integer() and abs(n) < _SMALL)
-        and not any(abs(n - a) <= 1e-9 * max(1.0, abs(a)) for a in allowed)
-        and not (1990 <= n <= 2100 and n.is_integer())  # fiscal years
-    ]
+    out = []
+    for m in _NUM.finditer(text):
+        n = float(m.group().replace(",", ""))
+        if not _bare_ordinal_or_year(n, text, m.start(), m.end()) and not any(
+                abs(n - a) <= 1e-9 * max(1.0, abs(a)) for a in allowed):
+            out.append(n)
+    return out

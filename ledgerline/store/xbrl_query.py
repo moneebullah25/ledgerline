@@ -24,8 +24,9 @@ class Fact:
     fiscal_year: int
     fiscal_period: str
     period_end: date
-    derived: bool
+    derived: bool  # a component was itself derived (e.g. a quarter from YTD), not "computed"
     source_url: str
+    components: tuple["Fact", ...] = ()  # the facts a ratio/diff concept is computed from
 
 
 def _period_filter(fiscal_period: str):
@@ -51,7 +52,7 @@ def get_xbrl_fact(s: Session, cik: str, concept: str, fiscal_year: int,
             return None
         value = a.value / b.value * 100 if c.ratio_of else a.value - b.value
         return Fact(value, c.unit, a.fact_ids + b.fact_ids, concept, fiscal_year,
-                    fiscal_period, a.period_end, True, a.source_url)
+                    fiscal_period, a.period_end, a.derived or b.derived, a.source_url, (a, b))
 
     for tag in c.tags:  # preference order: the first tag with a value for the period wins
         row = s.scalars(

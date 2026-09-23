@@ -12,10 +12,10 @@ import json
 from ledgerline import llm
 from ledgerline.graph import load_prompt
 from ledgerline.graph.adjudicator import (
-    BANNED,
     TRUTH_AGENTS,
     IntegrityError,
     add_usage,
+    audit,
     decide,
 )
 from ledgerline.models import Claim
@@ -83,10 +83,12 @@ def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:
     system, _ = load_prompt("critic")
     data = {"claim": claim.text, "leading_stance": stance,
             "evidence": json.dumps([e.model_dump() for e in evidence])}
+    cites = [c for e in evidence for c in e.citations]
     total = llm.Usage()
     for _ in range(2):
         out, usage = llm.structured("standard", system, data, "Argue the other side.", CriticOutput)
         total = add_usage(total, usage)
-        if not BANNED.search(out.argument):
+        # The argument can be quoted in the rationale: same number and vocabulary rules.
+        if not (problems := audit(out.argument, cites, claim.text)):
             return out, total
-    raise IntegrityError("critic argument used banned vocabulary twice")
+    raise IntegrityError(f"critic argument failed audit twice: {problems}", total)

@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 from ledgerline import llm
 from ledgerline.config import settings
 from ledgerline.graph import load_prompt
-from ledgerline.graph.adjudicator import BANNED
+from ledgerline.graph.adjudicator import audit
 from ledgerline.graph.agents.xbrl_table import mentions_value
 from ledgerline.graph.state import Ctx
 from ledgerline.models import Claim, Filing
 from ledgerline.schemas import Citation, EvidenceItem, Stance
-from ledgerline.store.retrieval import Hit, search
+from ledgerline.store import embed
+from ledgerline.store.retrieval import RERANK_DEPTH, Hit, _load, dense_ids, rrf, sparse_ids
 
 K = 5  # reranked chunks judged
 ENTAIL_MIN = 0.6
@@ -69,11 +70,30 @@ def windows(text: str) -> list[str]:
     return [text[spans[i][0]:spans[i + 1][1]].strip() for i in range(len(spans) - 1)]
 
 
-def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, llm.Usage]:
+def _search(s: Session, query: str, company_id: int, lock: Lock) -> list[Hit]:
+    """retrieval.search, split so that db_lock covers only the DB reads: the query embedding
+    and the rerank run outside it, so the other agents are not serialised behind inference."""
     with lock:
         fids = list(s.scalars(select(Filing.id).where(
-            Filing.company_id == ctx.company_id, Filing.form_type.in_(PERIODIC))))
-        hits = search(s, claim.text, company_id=ctx.company_id, k=K, filing_ids=fids) if fids else []
+            Filing.company_id == company_id, Filing.form_type.in_(PERIODIC))))
+    if not fids:
+        return []
+    qvec = embed.embed_query(query)
+    with lock:
+        fused = rrf([sparse_ids(s, query, company_id, fids),
+                     dense_ids(s, qvec, company_id, fids)])[:RERANK_DEPTH]
+        rows = _load(s, [cid for cid, _ in fused])
+    if not fused:
+        return []
+    ids = [cid for cid, _ in fused]
+    logits = embed.rerank_scores(query, [rows[cid].passage for cid in ids])
+    top = sorted(zip(ids, logits), key=lambda x: -x[1])[:K]
+    return [Hit(cid, r.filing_id, r.section_path, r.text, float(score), r.char_start, r.char_end)
+            for cid, score in top for r in [rows[cid]]]
+
+
+def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, llm.Usage]:
+    hits = _search(s, claim.text, ctx.company_id, lock)
     if not hits:
         return _insufficient("no 10-K/10-Q passages retrieved for this company"), llm.OFFLINE
     if llm.available():
@@ -121,13 +141,13 @@ def judge_llm(claim: Claim, hits: list[Hit]) -> tuple[EvidenceItem, llm.Usage]:
     j, usage = llm.structured("standard", system, data, "Judge the claim against the passages.",
                               _Judgment)
     ok = 0 <= j.passage < len(hits) and j.quote and j.quote in hits[j.passage].text
-    if BANNED.search(j.summary):  # §16 vocabulary: keep the stance, drop the model's wording
-        j.summary = f"The cited passage {'supports' if j.stance == 'supports' else 'contradicts'} the claim."
+    cites = [Citation(kind="chunk", ref_id=hits[j.passage].chunk_id, quote=j.quote)] if ok else []
+    if audit(j.summary, cites, claim.text):  # FR-45 / §16: keep the stance, drop the wording
+        j.summary = f"Judgment on the retrieved passages: {j.stance}."
     if j.stance == "insufficient" or not ok or (
             claim.value is not None and not mentions_value(j.quote, claim)):
         return _insufficient(j.summary, prompt_version=version), usage
     return EvidenceItem(
-        agent="filing_rag", stance=j.stance, summary=j.summary,
-        citations=[Citation(kind="chunk", ref_id=hits[j.passage].chunk_id, quote=j.quote)],
+        agent="filing_rag", stance=j.stance, summary=j.summary, citations=cites,
         payload={"prompt_version": version, "section": hits[j.passage].section_path},
     ), usage

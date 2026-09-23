@@ -83,7 +83,8 @@ def test_derived_margin_and_fcf_carry_component_ids(db, co):
     c = add(db, co, "PaymentsToAcquirePropertyPlantAndEquipment", 4, "2024-09-29", "2024-12-28",
             2025, "Q1")
     gm = get_xbrl_fact(db, CIK, "gross_margin", 2025, "Q1")
-    assert (gm.value, gm.unit, gm.fact_ids, gm.derived) == (45.0, "percent", (g, r), True)
+    assert (gm.value, gm.unit, gm.fact_ids, gm.derived) == (45.0, "percent", (g, r), False)
+    assert [(x.value, x.unit) for x in gm.components] == [(90.0, "USD"), (200.0, "USD")]
     fcf = get_xbrl_fact(db, CIK, "free_cash_flow", 2025, "Q1")
     assert (fcf.value, fcf.unit, fcf.fact_ids) == (26.0, "USD", (o, c))
 
