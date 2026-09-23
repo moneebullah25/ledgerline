@@ -23,4 +23,8 @@ def put_object(data: bytes, suffix: str = "") -> tuple[str, str]:
 
 
 def read_object(path: str) -> bytes:
-    return (settings().data_dir / path).read_bytes()
+    root = settings().data_dir.resolve()
+    full = (root / path).resolve()
+    if not full.is_relative_to(root):
+        raise ValueError(f"object path escapes the data dir: {path}")
+    return full.read_bytes()

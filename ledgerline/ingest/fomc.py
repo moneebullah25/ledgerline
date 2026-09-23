@@ -13,12 +13,14 @@ import tempfile
 from collections import Counter
 from datetime import date
 from pathlib import Path
+from urllib.parse import urljoin
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ledgerline.ingest.call_audio import ingest_call_audio
+from ledgerline.config import settings
+from ledgerline.ingest.call_audio import MAX_AUDIO_BYTES, ingest_call_audio
+from ledgerline.ingest.http import get
 from ledgerline.ingest.objects import put_object
 from ledgerline.models import CallAudio
 
@@ -28,6 +30,7 @@ LICENSE = ("Federal Reserve Board; 'Unless otherwise indicated, information on B
            "is in the public domain' (federalreserve.gov/disclaimer.htm). Audio track of the "
            "press-conference video embedded on the Board's page; transcript is the Board's PDF.")
 _UA = {"User-Agent": "Mozilla/5.0 (Ledgerline research)"}
+MAX_PAGE_BYTES = 50 * 2**20  # page, transcript PDF, player JSON, HLS playlists
 
 _NOISE = re.compile(r"^(Page \d+ of \d+|FINAL|Transcript of .*|.*Press Conference|"
                     r"(January|February|March|April|May|June|July|August|September|October|"
@@ -56,20 +59,30 @@ def parse_transcript(text: str) -> list[dict]:
     return turns
 
 
+def _fetch(url: str, headers: dict[str, str] | None = None) -> bytes:
+    return get(url, headers or _UA, max_bytes=MAX_PAGE_BYTES)
+
+
 def _audio_manifest(page_html: str) -> str:
     video = re.search(r'data-video-id="(\d+)"', page_html)[1]
     account = re.search(r'data-account="(\d+)"', page_html)[1]
-    cfg = httpx.get(f"https://players.brightcove.net/{account}/default_default/config.json",
-                    timeout=30).raise_for_status().json()
-    meta = httpx.get(
+    cfg = json.loads(_fetch(
+        f"https://players.brightcove.net/{account}/default_default/config.json"))
+    meta = json.loads(_fetch(
         f"https://edge.api.brightcove.com/playback/v1/accounts/{account}/videos/{video}",
-        headers={"Accept": f"application/json;pk={cfg['video_cloud']['policy_key']}"},
-        timeout=30).raise_for_status().json()
+        {"Accept": f"application/json;pk={cfg['video_cloud']['policy_key']}"}))
     master = next(src["src"] for src in meta["sources"]
                   if src.get("type") == "application/x-mpegURL" and src["src"].startswith("https"))
-    playlist = httpx.get(master, timeout=30).raise_for_status().text
-    # The audio rendition is a separate playlist, so we never download the video frames.
-    return re.search(r'#EXT-X-MEDIA:TYPE=AUDIO.*?URI="([^"]+)"', playlist)[1]
+    return audio_uri(master, _fetch(master).decode(errors="replace"))
+
+
+def audio_uri(master: str, playlist: str) -> str:
+    """The audio rendition is a separate playlist, so we never download the video frames.
+    Its URI may be relative to the master playlist; the result must still be https."""
+    uri = urljoin(master, re.search(r'#EXT-X-MEDIA:TYPE=AUDIO.*?URI="([^"]+)"', playlist)[1])
+    if not uri.startswith("https://"):
+        raise ValueError(f"audio rendition is not https: {uri}")
+    return uri
 
 
 def ingest_fomc_eval_set(s: Session, dates: list[str]) -> list[int]:
@@ -82,12 +95,17 @@ def ingest_fomc_eval_set(s: Session, dates: list[str]) -> list[int]:
         if existing is not None:
             ids.append(existing)
             continue
-        page = httpx.get(PAGE.format(d=d), headers=_UA, timeout=30).raise_for_status().text
-        pdf = httpx.get(PDF.format(d=d), headers=_UA, timeout=60).raise_for_status().content
-        with tempfile.TemporaryDirectory() as tmp:
+        page = _fetch(PAGE.format(d=d)).decode(errors="replace")
+        pdf = _fetch(PDF.format(d=d))
+        # Under data_dir: ingest_call_audio reads local files from there only.
+        settings().data_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=settings().data_dir) as tmp:
             audio, pdf_path = Path(tmp) / f"fomc{d}.m4a", Path(tmp) / "t.pdf"
-            subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i",
-                            _audio_manifest(page), "-vn", "-c:a", "copy", str(audio)], check=True)
+            # The playlist names further URLs ffmpeg follows: keep it on https, capped in size.
+            subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error",
+                            "-protocol_whitelist", "https,tls,tcp,crypto,hls",
+                            "-i", _audio_manifest(page), "-vn", "-c:a", "copy",
+                            "-fs", str(MAX_AUDIO_BYTES), str(audio)], check=True)
             pdf_path.write_bytes(pdf)
             text = subprocess.run(["pdftotext", str(pdf_path), "-"], check=True,
                                   capture_output=True, text=True).stdout
