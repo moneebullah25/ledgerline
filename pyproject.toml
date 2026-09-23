@@ -54,8 +54,9 @@ markers = [
     "db: needs a live Postgres+pgvector (LEDGERLINE_DATABASE_URL)",
     "ml: needs the [ml] extra and model downloads",
     "network: hits a real external API",
+    "perf: wall-clock latency assertions (run with LEDGERLINE_PERF=1)",
 ]
-addopts = "-m 'not network'"
+addopts = "-m 'not network and not perf'"
 
 [tool.ruff]
 line-length = 100
