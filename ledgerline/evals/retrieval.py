@@ -211,7 +211,7 @@ def rankings(s: Session, q: Query, scope: list[int]) -> dict[str, list[int]]:
     fused = [cid for cid, _ in rrf([sp, de])]
     head = fused[:RERANK_DEPTH]
     rows = _load(s, head)
-    scores = embed.rerank_scores(q.query, [rows[c][3] for c in head]) if head else []
+    scores = embed.rerank_scores(q.query, [rows[c].passage for c in head]) if head else []
     reranked = [c for _, c in sorted(zip(scores, head), key=lambda x: -x[0])]
     return {"sparse": sp, "dense": de, "rrf": fused, "rrf_rerank": reranked}
 

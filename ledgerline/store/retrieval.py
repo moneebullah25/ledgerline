@@ -1,19 +1,23 @@
 """FR-21 hybrid search over `chunk`: full-text + dense, fused with RRF, optional rerank.
 
-The sparse leg is Postgres full-text ranked by ts_rank_cd (cover density). It is
-BM25-style in role (lexical, rewards exact terms and numbers) but not BM25: there is no
-IDF term and length normalization is off by default. Numbers survive the english parser:
-"94,930" becomes the phrase '94' <-> '930' in both the tsvector and the query, and "94.9"
-stays one token, so a query quoting a printed figure matches it exactly.
+The sparse leg is Postgres full-text ranked by ts_rank (term frequency). It is BM25-style
+in role (lexical, rewards exact terms and numbers) but not BM25: there is no IDF term and
+no length normalization. The contract named ts_rank_cd; on the L1 eval (150 constructed
+queries, same OR query) ts_rank_cd gave sparse Recall@10 0.467 vs 0.620 for ts_rank, so
+ts_rank is used. Numbers survive the english parser: "94,930" becomes the phrase
+'94' <-> '930' in both the tsvector and the query, and "94.9" stays one token, so a query
+quoting a printed figure matches it exactly.
 """
 
 import re
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from ledgerline.store import embed
+from ledgerline.store.index import passage
 
 LEG_DEPTH = 50  # candidates per leg
 RERANK_DEPTH = 30
@@ -45,7 +49,7 @@ _WORD = re.compile(r"\w+(?:[.,]\w+)*")
 
 def _or_query(query: str) -> str:
     """websearch_to_tsquery ANDs every word, which almost never matches a whole natural
-    question. OR-ing the words lets ts_rank_cd rank by how many (and how close) they are.
+    question. OR-ing the words lets ts_rank score by how often they occur.
     Only word tokens are kept, so user text cannot inject websearch operators (-, quotes)."""
     return " or ".join(w for w in _WORD.findall(query) if w.lower() not in ("or", "and"))
 
@@ -61,7 +65,7 @@ def sparse_ids(s: Session, query: str, company_id: int,
         SELECT c.id FROM chunk c JOIN filing f ON f.id = c.filing_id,
              websearch_to_tsquery('english', :q) q
         WHERE {_filters(filing_ids)} AND c.tsv @@ q
-        ORDER BY ts_rank_cd(c.tsv, q) DESC, c.id LIMIT :n"""
+        ORDER BY ts_rank(c.tsv, q) DESC, c.id LIMIT :n"""
     params = dict(q=_or_query(query), cid=company_id, n=n, fids=filing_ids)
     return list(s.scalars(text(sql), params))
 
@@ -81,15 +85,30 @@ def dense_ids(s: Session, qvec, company_id: int,
     return list(s.scalars(text(sql), params))
 
 
-def _load(s: Session, ids: list[int]) -> dict[int, tuple]:
+class _Row(NamedTuple):
+    filing_id: int
+    section_path: str
+    text: str
+    char_start: int
+    char_end: int
+    passage: str  # what the reranker scores, see index.passage
+
+
+def _load(s: Session, ids: list[int]) -> dict[int, _Row]:
     if not ids:
         return {}
     rows = s.execute(
-        text("SELECT id, filing_id, section_path, text, char_start, char_end FROM chunk "
-             "WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+        text("""SELECT c.id, c.filing_id, c.section_path, c.text, c.char_start, c.char_end,
+                       co.name, f.form_type, f.fiscal_year, f.fiscal_period, f.period_of_report
+                FROM chunk c JOIN filing f ON f.id = c.filing_id
+                JOIN company co ON co.id = f.company_id
+                WHERE c.id IN :ids""").bindparams(bindparam("ids", expanding=True)),
         {"ids": ids},
     )
-    return {r[0]: r for r in rows}
+    return {r.id: _Row(r.filing_id, r.section_path, r.text, r.char_start, r.char_end,
+                       passage(r.name, r.form_type, r.fiscal_year, r.fiscal_period,
+                               r.period_of_report, r.section_path, r.text))
+            for r in rows}
 
 
 def search(s: Session, query: str, *, company_id: int, k: int = 10,
@@ -101,11 +120,12 @@ def search(s: Session, query: str, *, company_id: int, k: int = 10,
     scored = fused[:RERANK_DEPTH] if rerank else fused[:k]
     rows = _load(s, [cid for cid, _ in scored])
     if rerank and scored:
-        # Cross-encoder logits replace the RRF score; they are only comparable within a query.
-        logits = embed.rerank_scores(query, [rows[cid][3] for cid, _ in scored])
+        # The reranker sees the same company/period header as the embedder. Its logits
+        # replace the RRF score and are only comparable within one query.
+        logits = embed.rerank_scores(query, [rows[cid].passage for cid, _ in scored])
         scored = sorted(zip((cid for cid, _ in scored), logits), key=lambda x: -x[1])
     return [
-        Hit(cid, rows[cid][1], rows[cid][2], rows[cid][3], float(score),
-            rows[cid][4], rows[cid][5])
+        Hit(cid, r.filing_id, r.section_path, r.text, float(score), r.char_start, r.char_end)
         for cid, score in scored[:k]
+        for r in [rows[cid]]
     ]
