@@ -1,0 +1,348 @@
+Apple Inc.
+Form 10-Q
+For the Fiscal Quarter Ended June 27, 2026 
+TABLE OF CONTENTS
+Page
+Part I
+Item 1.
+Financial Statements
+1
+Item 2.
+Management’s Discussion and Analysis of Financial Condition and Results of Operations
+13
+Item 3.
+Quantitative and Qualitative Disclosures About Market Risk
+19
+Item 4.
+Controls and Procedures
+19
+Part II
+Item 1.
+Legal Proceedings
+20
+Item 1A.
+Risk Factors
+21
+Item 2.
+Unregistered Sales of Equity Securities and Use of Proceeds
+24
+Item 3.
+Defaults Upon Senior Securities
+24
+Item 4.
+Mine Safety Disclosures
+24
+Item 5.
+Other Information
+25
+Item 6.
+Exhibits
+25
+PART I — FINANCIAL INFORMATION
+Item 1. Financial Statements
+Apple Inc.
+CONDENSED CONSOLIDATED STATEMENTS OF OPERATIONS (Unaudited)
+(In millions, except number of shares, which are reflected in thousands, and per-share amounts)
+Three Months Ended
+Nine Months Ended
+June 27,
+2026
+June 28,
+2025
+June 27,
+2026
+June 28,
+2025
+Net sales:
+ Products
+$
+78,678
+
+$
+66,613
+
+$
+272,629
+
+$
+233,287
+
+ Services
+30,739
+
+27,423
+
+91,728
+
+80,408
+
+Total net sales
+109,417
+
+94,036
+
+364,357
+
+313,695
+
+Cost of sales:
+ Products
+47,153
+
+43,620
+
+163,810
+
+147,097
+
+ Services
+7,494
+
+6,698
+
+21,765
+
+19,738
+
+Total cost of sales
+54,647
+
+50,318
+
+185,575
+
+166,835
+
+Gross margin
+54,770
+
+43,718
+
+178,782
+
+146,860
+
+Operating expenses:
+Research and development
+11,729
+
+8,866
+
+34,035
+
+25,684
+
+Selling, general and administrative
+7,346
+
+6,650
+
+22,315
+
+20,553
+
+Total operating expenses
+19,075
+
+15,516
+
+56,350
+
+46,237
+
+Operating income
+35,695
+
+28,202
+
+122,432
+
+100,623
+
+Other income/(expense), net
+572
+
+(
+171
+)
+670
+
+(
+698
+)
+Income before provision for income taxes
+36,267
+
+28,031
+
+123,102
+
+99,925
+
+Provision for income taxes
+6,478
+
+4,597
+
+21,638
+
+15,381
+
+Net income
+$
+29,789
+
+$
+23,434
+
+$
+101,464
+
+$
+84,544
+
+Earnings per share:
+Basic
+$
+2.03
+
+$
+1.57
+
+$
+6.91
+
+$
+5.64
+
+Diluted
+$
+Item 2. Management’s Discussion and Analysis of Financial Condition and Results of Operations
+This Item and other sections of this Quarterly Report on Form 10-Q (“Form 10-Q”) contain forward-looking statements, within the meaning of the Private Securities Litigation Reform Act of 1995, that involve risks and uncertainties. Forward-looking statements provide current expectations of future events based on certain assumptions and include any statement that does not directly relate to any historical or current fact. For example, statements in this Form 10-Q regarding the potential future impact of macroeconomic conditions and tariffs and other measures on the Company’s business and results of operations are forward-looking statements
+.
+Item 3. Quantitative and Qualitative Disclosures About Market Risk
+There have been no material changes to the Company’s market risk during the first nine months of 2026. For a discussion of the Company’s exposure to market risk, refer to the Company’s market risk disclosures set forth in Part II, Item 7A, “Quantitative and Qualitative Disclosures About Market Risk” of the 2025 Form 10-K.
+Item 4. Controls and Procedures
+Evaluation of Disclosure Controls and Procedures
+Based on an evaluation under the supervision and with the participation of the Company’s management, the Company’s principal executive officer and principal financial officer have concluded that the Company’s disclosure controls and procedures as defined in Rules 13a-15(e) and 15d-15(e) under the Exchange Act were effective as of June 27, 2026 to provide reasonable assurance that information required to be disclosed by the Company in reports that it files or submits under the Exchange Act is (i) recorded, processed, summarized and reported within the time periods specified in the SEC rules and forms and (ii) accumulated and communicated to the Company’s management, including its principal executive officer and principal financial officer, as appropriate to allow timely decisions regarding required disclosure.
+Changes in Internal Control over Financial Reporting
+PART II — OTHER INFORMATION
+Item 1. Legal Proceedings
+Digital Markets Act Investigations
+On March 25, 2024, the European Commission (“Commission”) announced that it had opened a formal noncompliance investigation against the Company under Article 5(4) of the EU Digital Markets Act (“DMA”) (“Article 5(4) Investigation”). The Article 5(4) Investigation relates to how developers may communicate and promote offers to end users for apps distributed through the App Store
+®
+Item 1A. Risk Factors
+The Company’s business, reputation, results of operations, financial condition and stock price can be materially and adversely affected by a number of factors, whether currently known or unknown, including those described in Part I, Item 1A of the 2025 Form 10-K and Part II, Item 1A of the Form 10-Q for the quarter ended March 28, 2026 (the “second quarter 2026 Form 10-Q”), in each case under the heading “Risk Factors.” Except for the risk factors set forth below and those disclosed in Part II, Item 1A of the 
+second quarter 2026 
+Form 10-Q
+, which are incorporated by reference herein, there have been no material changes to the Company’s risk factors since the 2025 Form 10-K.
+Future operating results depend upon the Company’s ability to obtain components and computing resources in sufficient quantities and on commercially reasonable terms.
+Item 2. Unregistered Sales of Equity Securities and Use of Proceeds
+Purchases of Equity Securities by the Issuer and Affiliated Purchasers
+Share repurchase activity during the three months ended June 27, 2026, was as follows (in millions, except number of shares, which are reflected in thousands, and per-share amounts):
+Periods
+Total Number
+of Shares Purchased
+Average Price
+Paid Per Share
+Total Number of Shares
+Purchased as Part of Publicly
+Announced Plans or Programs
+Approximate Dollar Value of
+Shares That May Yet Be Purchased
+Under the Plans or Programs 
+(1)
+March 29, 2026 to May 2, 2026:
+Open market and privately negotiated purchases
+— 
+$
+— 
+— 
+May 3, 2026 to May 30, 2026:
+May 2026 ASRs
+26,468 
+(2)
+(2)
+26,468 
+(2)
+Open market and privately negotiated purchases
+26,920 
+$
+297.18 
+26,920 
+May 31, 2026 to June 27, 2026:
+Open market and privately negotiated purchases
+26,223 
+$
+296.18 
+26,223 
+Total
+79,611 
+$
+138,004 
+(1)
+Item 3. Defaults Upon Senior Securities
+None.
+Item 4. Mine Safety Disclosures
+Not applicable.
+Apple Inc. | Q3 2026 Form 10-Q | 24
+Item 5. Other Information
+Insider Trading Arrangements
+On 
+May 5, 2026
+, 
+Jennifer Newstead
+, the Company’s 
+Senior Vice President and General Counsel
+, 
+entered
+ into a trading plan intended to satisfy the affirmative defense conditions of Rule 10b5-1(c) under the Exchange Act. The plan provides for the sale, subject to certain price limits, of up to 
+24,912
+ shares of common stock, as well as up to 90% of shares vesting between June 15, 2026 and March 15, 2027, pursuant to certain equity awards granted to Ms. Newstead, excluding any shares withheld by the Company to satisfy income tax withholding and remittance obligations. Ms. Newstead’s plan will 
+expire
+ on 
+May 6, 2027
+, subject to early termination in accordance with the terms of the plan.
+On 
+May 28, 2026
+, 
+Tim Cook
+, the Company’s 
+Chief Executive Officer
+, 
+entered
+ into a trading plan intended to satisfy the affirmative defense conditions of Rule 10b5-1(c) under the Exchange Act. The plan provides for the sale, subject to certain price limits, of up to 
+16,250
+Item 6. Exhibits
+Incorporated by Reference
+Exhibit
+Number
+Exhibit Description
+Form
+Exhibit
+Filing Date/
+Period End Date
+31.1*
+Rule 13a-14(a) / 15d-14(a) Certification of Chief Executive Officer.
+31.2*
+Rule 13a-14(a) / 15d-14(a) Certification of Chief Financial Officer.
+32.1**
+Section 1350 Certifications of Chief Executive Officer and Chief Financial Officer.
+101*
+Inline XBRL Document Set for the condensed consolidated financial statements and accompanying notes in Part I, Item 1, “Financial Statements” of this Quarterly Report on Form 10-Q.
+104*
+Inline XBRL for the cover page of this Quarterly Report on Form 10-Q, included in the Exhibit 101 Inline XBRL Document Set.
+* Filed herewith.
+** Furnished herewith.
+Apple Inc. | Q3 2026 Form 10-Q | 25
+SIGNATURE
+Pursuant to the requirements of the Securities Exchange Act of 1934, the Registrant has duly caused this report to be signed on its behalf by the undersigned thereunto duly authorized.
+Date: July 31, 2026
+Apple Inc.
+By:
+/s/ Kevan Parekh
+Kevan Parekh
+Senior Vice President,
+Chief Financial Officer
+Apple Inc. | Q3 2026 Form 10-Q | 26
+
