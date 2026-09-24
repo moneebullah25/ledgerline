@@ -10,9 +10,12 @@ When no Anthropic credentials are configured, available() is False and every cal
 its deterministic offline implementation instead. Nothing here fabricates a response.
 """
 
+import json
 import os
 import re
 import secrets
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -53,9 +56,12 @@ OFFLINE = Usage()
 
 
 def available() -> bool:
-    return settings().llm_enabled and bool(
-        os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
-    )
+    cfg = settings()
+    if not cfg.llm_enabled:
+        return False
+    if cfg.llm_backend == "claude_cli":
+        return os.access(cfg.claude_bin, os.X_OK)
+    return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
 
 
 _TAG = re.compile(r"<(/?)(document)", re.IGNORECASE)
@@ -87,11 +93,14 @@ def structured[T: BaseModel](
     docs = "\n".join(
         f'<{tag} label="{label}">\n{_neutralise(text)}\n</{tag}>' for label, text in data.items()
     )
+    prompt = f"{docs}\n\n{instruction}"
+    if settings().llm_backend == "claude_cli":
+        return _structured_cli(model, system, prompt, schema)
     resp = _client().messages.parse(
         model=model,
         max_tokens=max_tokens,
         system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": f"{docs}\n\n{instruction}"}],
+        messages=[{"role": "user", "content": prompt}],
         output_format=schema,
     )
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
@@ -103,4 +112,37 @@ def structured[T: BaseModel](
         output_tokens=u.output_tokens,
         cache_read_tokens=u.cache_read_input_tokens or 0,
         cache_write_tokens=u.cache_creation_input_tokens or 0,
+    )
+
+
+CLI_TIMEOUT_S = 300
+
+
+def _structured_cli[T: BaseModel](
+    model: str, system: str, prompt: str, schema: type[T],
+) -> tuple[T, Usage]:
+    """The same call through `claude -p`: our system prompt replaces the CLI's, every tool
+    is disabled and the process runs in an empty directory, because the prompt carries
+    untrusted filing text. The prompt goes on stdin, never argv (it would show in ps)."""
+    with tempfile.TemporaryDirectory(prefix="ledgerline-cli-") as cwd:
+        proc = subprocess.run(
+            [settings().claude_bin, "-p", "--model", model, "--system-prompt", system,
+             "--strict-mcp-config", "--tools", "", "--output-format", "json",
+             "--json-schema", json.dumps(schema.model_json_schema())],
+            input=prompt, capture_output=True, text=True, cwd=cwd, timeout=CLI_TIMEOUT_S,
+            check=False,  # a non-zero exit still prints the JSON error we report below
+        )
+    try:
+        out = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise ValueError(f"claude CLI exit {proc.returncode}: {proc.stderr[-300:]}") from None
+    if out.get("is_error") or out.get("structured_output") is None:
+        raise ValueError(f"{model} returned no valid {schema.__name__} ({out.get('subtype')})")
+    u = out.get("usage", {})
+    return schema.model_validate(out["structured_output"]), Usage(
+        model=model,
+        input_tokens=u.get("input_tokens", 0),
+        output_tokens=u.get("output_tokens", 0),
+        cache_read_tokens=u.get("cache_read_input_tokens", 0),
+        cache_write_tokens=u.get("cache_creation_input_tokens", 0),
     )

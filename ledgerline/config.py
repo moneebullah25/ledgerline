@@ -3,6 +3,7 @@
 import re
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,6 +23,10 @@ class Settings(BaseSettings):
     # Anthropic credentials are read by the SDK itself (ANTHROPIC_API_KEY). Without them the
     # LLM-backed nodes fall back to their deterministic offline implementations.
     llm_enabled: bool = True
+    # "sdk": the Anthropic Python SDK (needs ANTHROPIC_API_KEY). "claude_cli": the local
+    # `claude` CLI in headless print mode, using its logged-in session (no API key).
+    llm_backend: Literal["sdk", "claude_cli"] = "sdk"
+    claude_bin: str = str(Path.home() / ".local/bin/claude")
     # Gates POST /v1/reports, the only endpoint that spends money. Unset: POST answers 503.
     api_key: SecretStr | None = None
     embed_model: str = "BAAI/bge-small-en-v1.5"
