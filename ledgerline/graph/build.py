@@ -73,8 +73,9 @@ def _agent_node(name: AgentName):
         t._stack = list(parent._stack)  # parent the span under verify_claim
         try:
             with t.span(f"agent.{name}") as a:
-                ev, usage = AGENTS[name](config["configurable"]["session"], state["claim"],
-                                         state["ctx"], state["ctx"].db_lock)
+                agent = config["configurable"].get("agents", AGENTS)[name]
+                ev, usage = agent(config["configurable"]["session"], state["claim"],
+                                  state["ctx"], state["ctx"].db_lock)
                 _record(a, usage)
                 a["stance"] = ev.stance
         finally:
@@ -154,7 +155,10 @@ def context(s: Session, claim: Claim) -> Ctx:
                tuple(reported) if reported else None, Lock())
 
 
-def verify_claim(s: Session, claim: Claim, tracer: Tracer) -> VerifyResult:
+def verify_claim(s: Session, claim: Claim, tracer: Tracer,
+                 agents: dict[AgentName, AgentFn] | None = None) -> VerifyResult:
+    """agents replaces entries of AGENTS for this call only (evaluation ablations); passed
+    through the graph config, so concurrent calls do not share a patched global."""
     # Load every column now, on this thread: an expired attribute would otherwise lazy-load
     # through the Session from inside an agent thread, outside db_lock.
     for col in Claim.__table__.columns:
@@ -162,7 +166,8 @@ def verify_claim(s: Session, claim: Claim, tracer: Tracer) -> VerifyResult:
     with tracer.span("verify_claim", claim_id=claim.id) as a:
         out = graph().invoke(
             {"claim": claim, "ctx": context(s, claim), "evidence": [], "usages": []},
-            config={"configurable": {"session": s, "tracer": tracer}},
+            config={"configurable": {"session": s, "tracer": tracer,
+                                     "agents": AGENTS | (agents or {})}},
         )
         usages = out["usages"]
         cost = sum(u.cost_usd for _, u in usages)

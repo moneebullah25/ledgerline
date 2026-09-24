@@ -72,7 +72,7 @@ def test_run_returns_gate_contract(monkeypatch):
     monkeypatch.setattr(l2, "load", lambda path: real if path == l2.GOLDEN else [])
     monkeypatch.setattr(l2, "PERTURBED", l2.GOLDEN)  # exists; load() is stubbed anyway
     labels = {"g1": "contradicted", "g2": "supported"}
-    monkeypatch.setattr(l2, "predict", lambda s, recs, override=None: {
+    monkeypatch.setattr(l2, "predict", lambda s, recs, override=None, workers=1: {
         r["id"]: {"label": labels[r["id"]], "evidence": {}} for r in recs})
     out = l2.run()
     assert out["metrics"]["contradiction_precision"] == 1.0

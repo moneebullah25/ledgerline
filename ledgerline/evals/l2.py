@@ -37,6 +37,7 @@ import argparse
 import json
 import subprocess
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from unittest.mock import patch
 
@@ -134,23 +135,45 @@ def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
     return out, unmatched
 
 
-def predict(s: Session, recs: list[dict], override=lambda rid: {}) -> dict[str, dict]:
+def _predict_one(s: Session, r: dict, agents: dict | None = None) -> dict:
+    try:
+        res = build.verify_claim(s, to_claim(s, r), Tracer(), agents)
+        return {"label": res.verdict.label, "refused": res.refused,
+                "evidence": {e.agent: e for e in res.evidence}}
+    except (SQLAlchemyError, ImportError):
+        raise
+    except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
+        return {"label": "unverifiable", "refused": True, "evidence": {},
+                "error": f"{type(e).__name__}: {e}"}
+
+
+def predict(s: Session, recs: list[dict], override=None, workers: int = 1) -> dict[str, dict]:
     """golden id -> {"label", "refused", "evidence": {agent: EvidenceItem}, "error"?}. A claim
     whose verification raises scores as the pipeline stores it: a refused `unverifiable`
-    (F5). Database errors and ImportError propagate: they would fail every claim alike."""
-    out = {}
-    for r in recs:
-        with patch.dict(build.AGENTS, override(r["id"])):
+    (F5). Database errors and ImportError propagate: they would fail every claim alike.
+    override(rid) -> {agent: fn} replaces agents for that claim only (ablations). workers > 1
+    verifies claims in parallel, one Session per claim, for the slow online path."""
+    def agents(r):
+        return override(r["id"]) if override else None
+    if workers <= 1:
+        return {r["id"]: _predict_one(s, r, agents(r)) for r in recs}
+    from ledgerline.db import engine
+
+    def one(r):
+        with Session(engine()) as ws:
             try:
-                res = build.verify_claim(s, to_claim(s, r), Tracer())
-                out[r["id"]] = {"label": res.verdict.label, "refused": res.refused,
-                                "evidence": {e.agent: e for e in res.evidence}}
-            except (SQLAlchemyError, ImportError):
-                raise
-            except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
-                out[r["id"]] = {"label": "unverifiable", "refused": True, "evidence": {},
-                                "error": f"{type(e).__name__}: {e}"}
-    return out
+                return r["id"], _predict_one(ws, r, agents(r))
+            finally:
+                ws.rollback()
+    with ThreadPoolExecutor(workers) as pool:
+        return dict(pool.map(one, recs))
+
+
+def save_evidence(pred: dict[str, dict], path: str) -> None:
+    """The per-claim evidence L3's judge reads, so it does not re-run the graph."""
+    with open(path, "w") as f:
+        json.dump({rid: {a: e.model_dump() for a, e in p["evidence"].items()}
+                   for rid, p in pred.items()}, f)
 
 
 def ablations(full: dict[str, dict]) -> dict:
@@ -187,7 +210,8 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
     }, {"real": m, "perturbed": mp, "combined": mc}
 
 
-def run(write: bool = False, current: bool = False) -> dict:
+def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bool = True,
+        evidence_out: str | None = None) -> dict:
     """The §12 gate contract: {"metrics": {...}, "per_claim": {id: {"gold", "predicted"}}}.
     current=True scores the golden labels against today's claims (see module docstring)."""
     from ledgerline.db import engine
@@ -199,11 +223,13 @@ def run(write: bool = False, current: bool = False) -> dict:
         if current:
             recs, unmatched = remap_current(s, recs)
         allr = recs + pert
-        full = predict(s, allr)
+        full = predict(s, allr, workers=workers)
+        if evidence_out:
+            save_evidence(full, evidence_out)
         abl = {}
-        for name, (override, ctx) in ablations(full).items():
+        for name, (override, ctx) in (ablations(full).items() if ablate else ()):
             with ctx:
-                abl[name] = predict(s, allr, override)
+                abl[name] = predict(s, allr, override, workers)
         s.rollback()
     metrics, detail = summarize(recs, pert, full)
     ab_metrics = {name: summarize(recs, pert, p)[0] for name, p in abl.items()}
@@ -239,8 +265,14 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--no-write", action="store_true", help="skip the eval_run row")
     p.add_argument("--current", action="store_true",
                    help="score gold labels against the current extractor's claims")
+    p.add_argument("--workers", type=int, default=1, help="parallel claims (online path)")
+    p.add_argument("--no-ablations", action="store_true",
+                   help="skip the ablation re-runs (each is a full online pass)")
+    p.add_argument("--evidence-out", help="save per-claim evidence for `l3 --evidence`")
     a = p.parse_args(argv)
-    print(json.dumps(run(write=not a.no_write, current=a.current)["metrics"], indent=2))
+    print(json.dumps(run(write=not a.no_write, current=a.current, workers=a.workers,
+                         ablate=not a.no_ablations, evidence_out=a.evidence_out)["metrics"],
+                     indent=2))
 
 
 if __name__ == "__main__":

@@ -18,12 +18,13 @@ import argparse
 import json
 import subprocess
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from pydantic import BaseModel
 
 from ledgerline import llm
 from ledgerline.evals.golden import ANNOTATOR, GOLDEN, load
-from ledgerline.schemas import Label
+from ledgerline.schemas import EvidenceItem, Label
 
 TARGET_KAPPA = 0.60
 JUDGE_SYSTEM = """You label claims from company earnings releases against evidence taken from the
@@ -68,19 +69,20 @@ def annotator_agreement(recs: list[dict]) -> dict:
     }
 
 
-def judge(recs: list[dict], evidence: dict[str, dict]) -> dict[str, JudgeLabel]:
+def judge(recs: list[dict], evidence: dict[str, dict],
+          workers: int = 1) -> dict[str, JudgeLabel]:
     """golden id -> judge output. evidence: l2.predict output (per-agent EvidenceItems)."""
-    out = {}
-    for r in recs:
+    def one(r):
         items = [e.model_dump() for e in evidence[r["id"]]["evidence"].values()]
         j, _ = llm.structured("judge", JUDGE_SYSTEM,
                               {"claim": r["claim"]["text"], "evidence": json.dumps(items)},
                               "Label the claim.", JudgeLabel)
-        out[r["id"]] = j
-    return out
+        return r["id"], j
+    with ThreadPoolExecutor(workers) as pool:
+        return dict(pool.map(one, recs))
 
 
-def run() -> tuple[dict, dict]:
+def run(evidence_path: str | None = None, workers: int = 1) -> tuple[dict, dict]:
     recs = load(GOLDEN)
     metrics = {"judge_ran": llm.available(), "judge_kappa": None, "judge_n": 0,
                "target_kappa": TARGET_KAPPA}
@@ -91,10 +93,16 @@ def run() -> tuple[dict, dict]:
         from ledgerline.db import engine
         from ledgerline.evals.l2 import predict
 
-        with Session(engine()) as s:
-            evidence = predict(s, recs)
-            s.rollback()
-        labels = judge(recs, evidence)
+        if evidence_path:  # saved by `l2 --evidence-out`: same graph run, not a second one
+            with open(evidence_path) as f:
+                saved = json.load(f)
+            evidence = {rid: {"evidence": {a: EvidenceItem.model_validate(e)
+                                           for a, e in ev.items()}} for rid, ev in saved.items()}
+        else:
+            with Session(engine()) as s:
+                evidence = predict(s, recs, workers=workers)
+                s.rollback()
+        labels = judge(recs, evidence, workers)
         metrics["judge_kappa"] = cohen_kappa([r["gold"] for r in recs],
                                              [labels[r["id"]].label for r in recs])
         metrics["judge_n"] = len(labels)
@@ -113,8 +121,10 @@ def run() -> tuple[dict, dict]:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.l3")
     p.add_argument("--no-write", action="store_true", help="skip the eval_run row")
+    p.add_argument("--evidence", help="evidence JSON from `l2 --evidence-out` (no graph re-run)")
+    p.add_argument("--workers", type=int, default=1, help="parallel judge calls")
     a = p.parse_args(argv)
-    metrics, details = run()
+    metrics, details = run(a.evidence, a.workers)
     if not a.no_write:
         from ledgerline.db import session
         from ledgerline.models import EvalRun
