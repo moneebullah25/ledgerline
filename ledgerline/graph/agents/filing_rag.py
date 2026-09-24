@@ -28,8 +28,7 @@ from ledgerline.graph.agents.xbrl_table import mentions_value
 from ledgerline.graph.state import Ctx
 from ledgerline.models import Claim, Filing
 from ledgerline.schemas import Citation, EvidenceItem, Stance
-from ledgerline.store import embed
-from ledgerline.store.retrieval import RERANK_DEPTH, Hit, _load, dense_ids, rrf, sparse_ids
+from ledgerline.store.retrieval import Hit, search
 
 K = 5  # reranked chunks judged
 ENTAIL_MIN = 0.6
@@ -71,25 +70,12 @@ def windows(text: str) -> list[str]:
 
 
 def _search(s: Session, query: str, company_id: int, lock: Lock) -> list[Hit]:
-    """retrieval.search, split so that db_lock covers only the DB reads: the query embedding
-    and the rerank run outside it, so the other agents are not serialised behind inference."""
+    """Hybrid search over the company's 10-K/10-Q chunks; `lock` covers only DB reads, so
+    the other agents are not serialised behind embedding and rerank inference."""
     with lock:
         fids = list(s.scalars(select(Filing.id).where(
             Filing.company_id == company_id, Filing.form_type.in_(PERIODIC))))
-    if not fids:
-        return []
-    qvec = embed.embed_query(query)
-    with lock:
-        fused = rrf([sparse_ids(s, query, company_id, fids),
-                     dense_ids(s, qvec, company_id, fids)])[:RERANK_DEPTH]
-        rows = _load(s, [cid for cid, _ in fused])
-    if not fused:
-        return []
-    ids = [cid for cid, _ in fused]
-    logits = embed.rerank_scores(query, [rows[cid].passage for cid in ids])
-    top = sorted(zip(ids, logits), key=lambda x: -x[1])[:K]
-    return [Hit(cid, r.filing_id, r.section_path, r.text, float(score), r.char_start, r.char_end)
-            for cid, score in top for r in [rows[cid]]]
+    return search(s, query, company_id=company_id, k=K, filing_ids=fids, db_lock=lock) if fids else []
 
 
 def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, llm.Usage]:

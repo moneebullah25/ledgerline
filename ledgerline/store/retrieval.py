@@ -10,6 +10,7 @@ quoting a printed figure matches it exactly.
 """
 
 import re
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -112,13 +113,16 @@ def _load(s: Session, ids: list[int]) -> dict[int, _Row]:
 
 
 def search(s: Session, query: str, *, company_id: int, k: int = 10,
-           filing_ids: list[int] | None = None, rerank: bool = True) -> list[Hit]:
-    fused = rrf([
-        sparse_ids(s, query, company_id, filing_ids),
-        dense_ids(s, embed.embed_query(query), company_id, filing_ids),
-    ])
-    scored = fused[:RERANK_DEPTH] if rerank else fused[:k]
-    rows = _load(s, [cid for cid, _ in scored])
+           filing_ids: list[int] | None = None, rerank: bool = True,
+           db_lock: AbstractContextManager | None = None) -> list[Hit]:
+    """db_lock guards only the DB reads (callers sharing one Session across threads pass a
+    Lock); the query embedding and the rerank run outside it."""
+    qvec = embed.embed_query(query)
+    with db_lock or nullcontext():
+        fused = rrf([sparse_ids(s, query, company_id, filing_ids),
+                     dense_ids(s, qvec, company_id, filing_ids)])
+        scored = fused[:RERANK_DEPTH] if rerank else fused[:k]
+        rows = _load(s, [cid for cid, _ in scored])
     if rerank and scored:
         # The reranker sees the same company/period header as the embedder. Its logits
         # replace the RRF score and are only comparable within one query.
