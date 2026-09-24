@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
 
+from sqlalchemy import func, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ BENCHMARK = "SPY"
 # Not an SEC call. Yahoo answers 429 to library User-Agents and, oddly, to full browser
 # strings without its cookies; the bare "Mozilla/5.0" is served.
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
+PRICE_RTOL = 1e-6  # float32 ulp is ~6e-8 relative; a dividend re-base moves adj_close >1e-4
 LICENSE_NOTE = ("Yahoo Finance chart API; personal/research use under Yahoo's terms, "
                 "not redistributed")
 
@@ -30,14 +32,19 @@ def ingest_market_data(s: Session, ticker: str, start: date, end: date) -> int:
         return 0
     # Yahoo re-bases the whole history after a split or dividend (close for splits, adj_close
     # for both), so every re-fetched day is upserted: stored returns follow the latest basis.
-    # Returns rows inserted or re-based.
+    # Returns rows inserted, re-based, or carrying the pre-0004 'unrecorded' placeholder
+    # hash. sha256 itself is not compared: every response hashes differently (meta carries
+    # the live quote), so comparing it would rewrite the whole history on each run. Prices
+    # compare within PRICE_RTOL: Yahoo's adj_close wobbles by one float32 ulp between calls.
     stmt = insert(MarketPrice)
+    moved = [func.abs(getattr(MarketPrice, c) - stmt.excluded[c])
+             > PRICE_RTOL * func.abs(stmt.excluded[c]) for c in ("close", "adj_close")]
     stmt = stmt.on_conflict_do_update(
         constraint="uq_price",
         set_={c: stmt.excluded[c] for c in ("close", "adj_close", "volume", "source_url",
                                             "fetched_at", "sha256", "license_note")},
-        where=(MarketPrice.close != stmt.excluded.close)
-        | (MarketPrice.adj_close != stmt.excluded.adj_close),
+        where=or_(*moved, MarketPrice.volume.is_distinct_from(stmt.excluded.volume),
+                  MarketPrice.sha256 == "unrecorded"),
     ).returning(MarketPrice.id)
     return len(s.execute(stmt, rows).all())
 

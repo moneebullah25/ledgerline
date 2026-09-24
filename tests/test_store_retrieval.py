@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 
 from ledgerline.models import Chunk, Company, Filing
 from ledgerline.store import embed
+from ledgerline.store.__main__ import verify_offsets
 from ledgerline.store.index import index_filing
 from ledgerline.store.retrieval import _or_query, rrf, search
 
@@ -64,3 +65,8 @@ def test_index_and_search(db, monkeypatch):
     risk = search(db, "supply chain risks", company_id=co.id, k=1, rerank=False)
     assert risk[0].section_path == "Part II > Item 1A. Risk Factors"
     assert search(db, "net sales", company_id=co.id + 1, rerank=False) == []
+
+    # verify-offsets: clean now; a changed load_text shifts every slice after the edit.
+    assert verify_offsets(db) == 0
+    doc = "PREFACE\n" + doc
+    assert verify_offsets(db) == 2

@@ -82,8 +82,8 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [ ] F7 Report layout: group findings by label (contradicted, then unverifiable, then supported), severity-ranked within each group, so refusals never sit above findings.
 
 ## G. Ingest (`ingest/**`, `store/__main__.py`)
-- [ ] G1 Upserts compare the full stored tuple with IS DISTINCT FROM (xbrl: value, derived, fiscal_year, fiscal_period, duration_days, form, filed; market: close, adj_close, volume, sha256), so parser fixes and pre-0004 `sha256='unrecorded'` rows are corrected.
-- [ ] G2 `python -m ledgerline.store verify-offsets`: re-slices every stored chunk (and claim span) against current `load_text`; exits non-zero on any mismatch. Run it and record the result.
+- [x] G1 Upserts compare the full stored tuple with IS DISTINCT FROM (xbrl: value, derived, fiscal_year, fiscal_period, duration_days, form, filed; market: close, adj_close, volume, sha256), so parser fixes and pre-0004 `sha256='unrecorded'` rows are corrected. Deviation: market compares close/adj_close within 1e-6 relative (Yahoo float32 wobble) plus volume, and rewrites sha256 only when stored `unrecorded` (the response hash differs every call). Backfill: facts 0, prices 12012 corrected.
+- [x] G2 `python -m ledgerline.store verify-offsets`: re-slices every stored chunk (and claim span) against current `load_text`; exits non-zero on any mismatch. Run it and record the result. Result 2026-09-23 on main DB: 12052 offsets verified, 0 mismatches.
 
 ## H. Graph (`graph/**`, `schemas.py`) — after the L2 agent finishes
 - [ ] H1 Adjudicator label-mismatch fallback: use the offline critic (or none), attach usage to any IntegrityError, and return usage with model=None so the verdict is not labelled online.

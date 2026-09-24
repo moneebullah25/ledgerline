@@ -5,7 +5,7 @@ from datetime import date
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from ledgerline.config import settings
 from ledgerline.ingest import edgar, market, xbrl
@@ -168,6 +168,11 @@ def test_changed_payload_rebases_derived_quarters(db, monkeypatch, tmp_path):
     assert xbrl.ingest_xbrl_facts(db, "AAPL") == 2  # H1 and the derived Q2 updated
     assert derived() == [("Q2", 25)]
 
+    # A stored row a parser fix would label differently (same value) is corrected too.
+    db.execute(update(XbrlFact).where(XbrlFact.derived).values(duration_days=1))
+    assert xbrl.ingest_xbrl_facts(db, "AAPL") == 1
+    assert derived() == [("Q2", 25)]
+
     # An amendment files the 3-month Q2 itself: the derived stand-in is deleted, not kept.
     q2 = H1 | {"start": "2024-12-29", "val": 24, "accn": "a2x", "form": "10-Q/A"}
     payload = ocf(Q1, H1 | {"val": 55}, q2)
@@ -190,7 +195,13 @@ def test_market_prices_rebased_on_refetch(db, monkeypatch):
     day = date(2025, 9, 4)
     assert market.ingest_market_data(db, "AAPL", day, day) == 1
     assert market.ingest_market_data(db, "AAPL", day, day) == 0
+    body = chart(238.90001)  # Yahoo's float32 ulp wobble between calls is not a re-base
+    assert market.ingest_market_data(db, "AAPL", day, day) == 0
     body = chart(237.5)  # a later dividend re-based the history
     assert market.ingest_market_data(db, "AAPL", day, day) == 1
     row = db.scalars(select(MarketPrice)).one()
     assert row.adj_close == 237.5 and row.sha256 != "unrecorded"
+    db.execute(update(MarketPrice).values(sha256="unrecorded", volume=None))  # pre-0004 row
+    assert market.ingest_market_data(db, "AAPL", day, day) == 1
+    db.refresh(row)
+    assert row.sha256 != "unrecorded" and row.volume == 100

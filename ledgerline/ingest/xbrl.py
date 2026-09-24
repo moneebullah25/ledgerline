@@ -18,7 +18,7 @@ import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,7 @@ NOT_ADDITIVE = {"us-gaap:EarningsPerShareDiluted"}
 SPANS = {"Q": (80, 100), "H": (170, 190), "9M": (260, 285), "Y": (350, 380)}
 YTD_SPAN = {"Q1": "Q", "Q2": "H", "Q3": "9M", "Q4": "Y"}  # Q4's cumulative value is FY
 PREV = {"Q2": "Q1", "Q3": "Q2", "Q4": "Q3"}
+_CONTENT = ("value", "derived", "fiscal_year", "fiscal_period", "duration_days", "form", "filed")
 
 
 def ingest_xbrl_facts(s: Session, ticker: str) -> int:
@@ -62,16 +63,16 @@ def ingest_xbrl_facts(s: Session, ticker: str) -> int:
         acc = r["accession_no"]
         r |= {"company_id": company_id, "fetched_at": now, "sha256": sha, "license_note": LICENSE,
               "source_url": f"{ARCHIVES}/{int(cik)}/{acc.replace('-', '')}/{acc}-index.html"}
-    # A changed payload (a corrected value, an amendment that moves a YTD base) must not
-    # leave a stale number behind: rows whose value or derived flag changed are updated,
-    # and derived quarters the new payload no longer produces are deleted.
+    # A changed payload (a corrected value, an amendment that moves a YTD base) or a parser
+    # fix must not leave a stale row behind: rows whose parsed content differs in any column
+    # are updated, and derived quarters the new payload no longer produces are deleted.
+    # sha256/fetched_at are not compared (the payload hash changes daily), only refreshed.
     stmt = insert(XbrlFact)
     stmt = stmt.on_conflict_do_update(
         constraint="uq_xbrl_fact",
-        set_={c: stmt.excluded[c] for c in ("value", "derived", "fiscal_year", "fiscal_period",
-                                            "duration_days", "form", "filed", "fetched_at",
-                                            "sha256")},
-        where=(XbrlFact.value != stmt.excluded.value) | (XbrlFact.derived != stmt.excluded.derived),
+        set_={c: stmt.excluded[c] for c in _CONTENT + ("fetched_at", "sha256")},
+        where=tuple_(*(getattr(XbrlFact, c) for c in _CONTENT))
+        .is_distinct_from(tuple_(*(stmt.excluded[c] for c in _CONTENT))),
     ).returning(XbrlFact.id)
     written = sum(len(s.execute(stmt, rows[i:i + 2000]).all()) for i in range(0, len(rows), 2000))
 

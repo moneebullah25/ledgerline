@@ -1,12 +1,15 @@
-"""python -m ledgerline.store index --all | index --filing ID | explain"""
+"""python -m ledgerline.store index --all | index --filing ID | explain | verify-offsets"""
 
 import argparse
 import re
+import sys
 import time
 
-from sqlalchemy import text
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
 from ledgerline.db import session
+from ledgerline.models import Chunk, Claim, Filing, Segment
 from ledgerline.store import embed
 from ledgerline.store.index import index_filing, unindexed_filing_ids
 
@@ -37,6 +40,45 @@ def explain(query: str = "total net sales for the quarter") -> None:
         print(f"--- {label}\n" + "\n".join(re.sub(r"'\[[^']*\]'", "'[...]'", ln) for ln in plan))
 
 
+def verify_offsets(s: Session) -> int:
+    """Re-slice every chunk and claim against its source as loaded today (load_text for
+    filings, segment.text for call claims, whose spans are segment-relative). Prints each
+    mismatch; returns how many there were."""
+    from ledgerline.ingest.documents import load_text
+
+    bad = checked = 0
+
+    def check(kind, rid, where, source, a, b, t):
+        nonlocal bad, checked
+        checked += 1
+        if source is None or source[a:b] != t:
+            bad += 1
+            print(f"{kind} {rid} ({where}) [{a}:{b}] does not match")
+
+    segments = dict(s.execute(select(Segment.id, Segment.text)).all())
+    for seg_id, cid, a, b, t in s.execute(select(
+            Claim.segment_id, Claim.id, Claim.span_start, Claim.span_end, Claim.text)
+            .where(Claim.segment_id.is_not(None))):
+        check("claim", cid, f"segment {seg_id}", segments[seg_id], a, b, t)
+    for filing in s.scalars(select(Filing).order_by(Filing.id)):
+        rows = [("chunk", *r) for r in s.execute(select(
+            Chunk.id, Chunk.char_start, Chunk.char_end, Chunk.text)
+            .where(Chunk.filing_id == filing.id))]
+        rows += [("claim", *r) for r in s.execute(select(
+            Claim.id, Claim.span_start, Claim.span_end, Claim.text)
+            .where(Claim.filing_id == filing.id))]
+        if rows:
+            try:
+                doc = load_text(filing)
+            except OSError as e:  # object missing from the store: nothing can be re-sliced
+                print(f"filing {filing.id}: cannot load text ({e})")
+                doc = None
+            for kind, rid, a, b, t in rows:
+                check(kind, rid, f"filing {filing.id}", doc, a, b, t)
+    print(f"verified {checked} offsets: {bad} mismatches")
+    return bad
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="python -m ledgerline.store")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -45,7 +87,12 @@ def main() -> None:
     g.add_argument("--all", action="store_true", help="every filing without chunks yet")
     g.add_argument("--filing", type=int)
     sub.add_parser("explain")
+    sub.add_parser("verify-offsets", help="exit 1 if any chunk/claim no longer re-slices")
     a = p.parse_args()
+
+    if a.cmd == "verify-offsets":
+        with session() as s:
+            sys.exit(1 if verify_offsets(s) else 0)
 
     if a.cmd == "explain":
         explain()
