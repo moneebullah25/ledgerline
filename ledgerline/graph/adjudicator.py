@@ -119,10 +119,23 @@ def _describe(claim: Claim, e: EvidenceItem) -> str:
 def adjudicate(
     claim: Claim, evidence: list[EvidenceItem], critic: CriticOutput | None,
 ) -> tuple[VerdictDraft, llm.Usage, str | None]:
-    """(verdict, spend, model that wrote the verdict; None for the offline rule)."""
-    if llm.available():
+    """(verdict, spend, model that wrote the verdict; None for the offline rule).
+
+    The judge model is called only when judgment is needed (§14 cost): truth-bearing agents
+    disagree, or a filing passage decides. An unopposed filed-fact verdict is arithmetic,
+    and the model's label must equal the rule's anyway (A3), so the audited rule writes it.
+    """
+    if llm.available() and needs_judgment(claim, evidence):
         return _adjudicate_llm(claim, evidence, critic)
     return _adjudicate_offline(claim, evidence, critic), llm.OFFLINE, None
+
+
+def needs_judgment(claim: Claim, evidence: list[EvidenceItem]) -> bool:
+    _, e = decide(claim, evidence)
+    if e is None:
+        return False
+    stances = {x.stance for x in evidence if x.agent in TRUTH_AGENTS} - {"insufficient"}
+    return len(stances) > 1 or e.agent == "filing_rag"
 
 
 def _adjudicate_offline(

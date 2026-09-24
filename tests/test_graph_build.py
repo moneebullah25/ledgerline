@@ -180,6 +180,9 @@ XBRL = ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]])
 USAGE = Usage("claude-opus-5", 100, 10)
 
 
+NEEDS_JUDGMENT = adjudicator.needs_judgment
+
+
 @pytest.fixture
 def online(monkeypatch):
     """Queue model outputs; returns the list of instructions the model received."""
@@ -188,6 +191,8 @@ def online(monkeypatch):
     def install(*outputs):
         queue = list(outputs)
         monkeypatch.setattr(llm, "available", lambda: True)
+        # Exercise the judge path; the gating rule has its own test below.
+        monkeypatch.setattr(adjudicator, "needs_judgment", lambda claim, evidence: True)
 
         def structured(tier, system, data, instruction, schema):
             seen.append((instruction, data))
@@ -273,3 +278,13 @@ def test_online_critic_retries_on_uncited_number_then_falls_back(online):
     out, u = critic.critique(CLAIM, [XBRL])
     assert out == critic.critique_offline(CLAIM, [XBRL]) and u.input_tokens > 0
     assert "rejected_answer_problems" in seen[-1][1]  # the retry says why
+
+
+def test_judge_model_only_when_judgment_is_needed(online, monkeypatch):
+    seen = online(V(), V())
+    monkeypatch.setattr(adjudicator, "needs_judgment", NEEDS_JUDGMENT)
+    v, _, model = adjudicator.adjudicate(CLAIM, [XBRL], None)  # unopposed filed fact
+    assert model is None and seen == [] and v.label == "supported"
+    rag = ev("filing_rag", "contradicts", [Citation(kind="chunk", ref_id=5, quote="q")])
+    assert adjudicator.needs_judgment(CLAIM, [XBRL, rag])  # agents disagree
+    assert not adjudicator.needs_judgment(CLAIM, [XBRL])
