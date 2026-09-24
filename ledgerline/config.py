@@ -4,7 +4,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # Anthropic credentials are read by the SDK itself (ANTHROPIC_API_KEY). Without them the
     # LLM-backed nodes fall back to their deterministic offline implementations.
     llm_enabled: bool = True
+    # Gates POST /v1/reports, the only endpoint that spends money. Unset: POST answers 503.
+    api_key: SecretStr | None = None
     embed_model: str = "BAAI/bge-small-en-v1.5"
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     nli_model: str = "cross-encoder/nli-deberta-v3-small"

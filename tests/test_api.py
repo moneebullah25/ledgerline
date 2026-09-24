@@ -10,6 +10,7 @@ from test_report_generate import seed_report
 
 from ledgerline.api import main as api
 from ledgerline.api.main import app, get_session
+from ledgerline.config import settings
 from ledgerline.models import Claim, EvalRun, Report
 
 KEY = "test-key"
@@ -18,9 +19,11 @@ KEY = "test-key"
 @pytest.fixture
 def client(db, monkeypatch):
     monkeypatch.setenv("LEDGERLINE_API_KEY", KEY)
+    settings.cache_clear()
     app.dependency_overrides[get_session] = lambda: db
     yield TestClient(app, headers={"X-API-Key": KEY})
     app.dependency_overrides.clear()
+    settings.cache_clear()
 
 
 def _is_422_list(r) -> bool:
@@ -75,6 +78,7 @@ def test_post_requires_api_key(client, db, monkeypatch):
     assert client.post("/v1/reports", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.post("/v1/reports", json=body, headers={"X-API-Key": ""}).status_code == 401
     monkeypatch.delenv("LEDGERLINE_API_KEY")
+    monkeypatch.setattr(settings(), "api_key", None)  # a key in the developer's .env must not leak in
     assert client.post("/v1/reports", json=body).status_code == 503  # fail closed
     assert client.get("/v1/reports").status_code == 200  # reads stay public
 

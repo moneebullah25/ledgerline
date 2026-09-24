@@ -11,7 +11,6 @@ are public. Every 422 has FastAPI's list shape: {"detail": [{"loc", "msg", "type
 
 import base64
 import hmac
-import os
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
@@ -23,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.orm import Session
 
+from ledgerline.config import settings
 from ledgerline.db import engine
 from ledgerline.models import Claim, Company, EvalRun, Evidence, Report, Span, Verdict
 from ledgerline.pipeline import FY_UNSUPPORTED
@@ -201,7 +201,9 @@ def healthz(s: DB) -> dict:
 
 
 def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
-    expected = os.environ.get("LEDGERLINE_API_KEY")
+    # Through Settings, so a key in .env works for a local uvicorn as well as under compose.
+    secret = settings().api_key
+    expected = secret.get_secret_value() if secret else ""
     if not expected:
         raise HTTPException(503, "report creation is disabled: LEDGERLINE_API_KEY is not set")
     if x_api_key is None or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
