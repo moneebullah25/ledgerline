@@ -1,5 +1,1327 @@
 {
-  "metrics": {"contradiction_precision": null},
-  "per_claim": {},
-  "note": "No L2 run recorded yet. Populate with `python -m ledgerline.evals.gate --write-baseline` on main."
+  "metrics": {
+    "ablation_no_critic_accuracy": 0.71,
+    "ablation_no_critic_contradiction_precision": 0.21052631578947367,
+    "ablation_no_reranker_accuracy": 0.71,
+    "ablation_no_reranker_contradiction_precision": 0.21052631578947367,
+    "ablation_xbrl_only_accuracy": 0.705,
+    "ablation_xbrl_only_contradiction_precision": 0.21052631578947367,
+    "accuracy": 0.71,
+    "combined_contradiction_precision": 0.8076923076923077,
+    "contradiction_precision": 0.21052631578947367,
+    "contradiction_recall": 0.6666666666666666,
+    "errors": 0,
+    "macro_f1": 0.590700178993126,
+    "n_perturbed": 125,
+    "n_real": 200,
+    "perturbed_contradiction_recall": 0.944,
+    "supported_f1": 0.8014981273408239,
+    "supported_precision": 0.9553571428571429,
+    "supported_recall": 0.6903225806451613,
+    "unverifiable_f1": 0.6506024096385542,
+    "unverifiable_precision": 0.54,
+    "unverifiable_recall": 0.8181818181818182
+  },
+  "per_claim": {
+    "g001": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g002": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g003": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g004": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g005": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g006": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g007": {
+      "gold": "unverifiable",
+      "predicted": "contradicted"
+    },
+    "g008": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g009": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g010": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g011": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g012": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g013": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g014": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g015": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g016": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g017": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g018": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g019": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g020": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g021": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g022": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g023": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g024": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g025": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g026": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g027": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g028": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g029": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g030": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g031": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g032": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g033": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g034": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g035": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g036": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g037": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g038": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g039": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g040": {
+      "gold": "unverifiable",
+      "predicted": "contradicted"
+    },
+    "g041": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g042": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g043": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g044": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g045": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g046": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g047": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g048": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g049": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g050": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g051": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g052": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g053": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g054": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g055": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g056": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g057": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g058": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g059": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g060": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g061": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g062": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g063": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g064": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g065": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g066": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g067": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g068": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g069": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g070": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g071": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g072": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g073": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g074": {
+      "gold": "unverifiable",
+      "predicted": "contradicted"
+    },
+    "g075": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g076": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g077": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g078": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g079": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g080": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g081": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g082": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g083": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g084": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g085": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g086": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g087": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g088": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g089": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g090": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g091": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g092": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g093": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g094": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g095": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g096": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g097": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g098": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g099": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g100": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g101": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g102": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g103": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g104": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g105": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g106": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g107": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g108": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g109": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g110": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g111": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g112": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g113": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g114": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g115": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g116": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g117": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g118": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g119": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g120": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g121": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g122": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g123": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g124": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g125": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g126": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g127": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g128": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g129": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g130": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g131": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g132": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g133": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g134": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g135": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g136": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g137": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g138": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g139": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g140": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g141": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g142": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g143": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g144": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g145": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g146": {
+      "gold": "unverifiable",
+      "predicted": "contradicted"
+    },
+    "g147": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g148": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g149": {
+      "gold": "contradicted",
+      "predicted": "supported"
+    },
+    "g150": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g151": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "g152": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g153": {
+      "gold": "contradicted",
+      "predicted": "supported"
+    },
+    "g154": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g155": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g156": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g157": {
+      "gold": "supported",
+      "predicted": "contradicted"
+    },
+    "g158": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g159": {
+      "gold": "contradicted",
+      "predicted": "supported"
+    },
+    "g160": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "g161": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g162": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g163": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g164": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g165": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g166": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g167": {
+      "gold": "unverifiable",
+      "predicted": "supported"
+    },
+    "g168": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g169": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g170": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g171": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g172": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g173": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g174": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g175": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g176": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g177": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g178": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g179": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g180": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g181": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g182": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g183": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g184": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g185": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g186": {
+      "gold": "supported",
+      "predicted": "supported"
+    },
+    "g187": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g188": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g189": {
+      "gold": "unverifiable",
+      "predicted": "supported"
+    },
+    "g190": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g191": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g192": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g193": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g194": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g195": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g196": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "g197": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g198": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g199": {
+      "gold": "unverifiable",
+      "predicted": "unverifiable"
+    },
+    "g200": {
+      "gold": "supported",
+      "predicted": "unverifiable"
+    },
+    "p001": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p002": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p003": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p004": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p005": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p006": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p008": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p009": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p010": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p011": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p012": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p013": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p014": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p015": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p016": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p017": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p018": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p019": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p020": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p021": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p022": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p023": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p024": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p025": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p026": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p027": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p028": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p029": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p030": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p031": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p032": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p033": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p034": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p035": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p036": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p037": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p038": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p039": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p041": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p042": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p043": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p044": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p045": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p046": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p047": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p048": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p049": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p050": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p051": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p052": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p053": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p054": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p055": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p056": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p057": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p058": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p059": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p060": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p061": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p062": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p063": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p064": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p065": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p066": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p067": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p068": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p069": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p070": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p071": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p072": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p073": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p076": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p077": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p078": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p079": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p080": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p081": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p082": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p083": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p084": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p085": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p086": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p087": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p088": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p089": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p090": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p091": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p092": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p093": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p094": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p095": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p097": {
+      "gold": "contradicted",
+      "predicted": "unverifiable"
+    },
+    "p098": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p099": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p100": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p101": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p102": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p103": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p104": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p105": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p106": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p107": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p108": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p109": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p110": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p111": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p112": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p113": {
+      "gold": "contradicted",
+      "predicted": "supported"
+    },
+    "p114": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p115": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p116": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p117": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p118": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p120": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p121": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p122": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p123": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p126": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p128": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p129": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p130": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p131": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p132": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p134": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    },
+    "p135": {
+      "gold": "contradicted",
+      "predicted": "contradicted"
+    }
+  }
 }
