@@ -1,25 +1,25 @@
 {
   "metrics": {
     "ablation_no_critic_accuracy": 0.71,
-    "ablation_no_critic_contradiction_precision": 0.21052631578947367,
+    "ablation_no_critic_contradiction_precision": 0.22580645161290322,
     "ablation_no_reranker_accuracy": 0.71,
-    "ablation_no_reranker_contradiction_precision": 0.21052631578947367,
+    "ablation_no_reranker_contradiction_precision": 0.22580645161290322,
     "ablation_xbrl_only_accuracy": 0.705,
-    "ablation_xbrl_only_contradiction_precision": 0.21052631578947367,
+    "ablation_xbrl_only_contradiction_precision": 0.22580645161290322,
     "accuracy": 0.71,
-    "combined_contradiction_precision": 0.8076923076923077,
-    "contradiction_precision": 0.21052631578947367,
-    "contradiction_recall": 0.6666666666666666,
+    "combined_contradiction_precision": 0.8356164383561644,
+    "contradiction_precision": 0.22580645161290322,
+    "contradiction_recall": 0.5833333333333334,
     "errors": 0,
-    "macro_f1": 0.590700178993126,
+    "macro_f1": 0.5794310392120922,
     "n_perturbed": 125,
     "n_real": 200,
-    "perturbed_contradiction_recall": 0.944,
-    "supported_f1": 0.8014981273408239,
-    "supported_precision": 0.9553571428571429,
-    "supported_recall": 0.6903225806451613,
-    "unverifiable_f1": 0.6506024096385542,
-    "unverifiable_precision": 0.54,
+    "perturbed_contradiction_recall": 0.92,
+    "supported_f1": 0.8059701492537313,
+    "supported_precision": 0.9557522123893806,
+    "supported_recall": 0.6967741935483871,
+    "unverifiable_f1": 0.6067415730337079,
+    "unverifiable_precision": 0.48214285714285715,
     "unverifiable_recall": 0.8181818181818182
   },
   "per_claim": {
@@ -237,7 +237,7 @@
     },
     "g054": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g055": {
       "gold": "supported",
@@ -297,7 +297,7 @@
     },
     "g069": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g070": {
       "gold": "supported",
@@ -381,7 +381,7 @@
     },
     "g090": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g091": {
       "gold": "supported",
@@ -529,7 +529,7 @@
     },
     "g127": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "supported"
     },
     "g128": {
       "gold": "supported",
@@ -629,7 +629,7 @@
     },
     "g152": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g153": {
       "gold": "contradicted",
@@ -649,7 +649,7 @@
     },
     "g157": {
       "gold": "supported",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g158": {
       "gold": "contradicted",
@@ -661,7 +661,7 @@
     },
     "g160": {
       "gold": "contradicted",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "g161": {
       "gold": "unverifiable",
@@ -1029,7 +1029,7 @@
     },
     "p054": {
       "gold": "contradicted",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "p055": {
       "gold": "contradicted",
@@ -1089,7 +1089,7 @@
     },
     "p069": {
       "gold": "contradicted",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "p070": {
       "gold": "contradicted",
@@ -1165,7 +1165,7 @@
     },
     "p090": {
       "gold": "contradicted",
-      "predicted": "contradicted"
+      "predicted": "unverifiable"
     },
     "p091": {
       "gold": "contradicted",
