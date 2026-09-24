@@ -41,7 +41,7 @@ def main() -> None:
             try:
                 with session() as s:
                     print(f"{kind} {i}: {fn(s, i, use_ner=not a.no_ner)} claims", flush=True)
-            except ValueError as e:  # no fiscal period on the source: nothing to anchor claims to
+            except ValueError as e:  # no fiscal period on the source, or the LLM pass failed twice
                 print(f"{kind} {i}: skipped ({e})", flush=True)
     with session() as s:
         linked = sum(link_across_quarters(s, c) for c in companies)

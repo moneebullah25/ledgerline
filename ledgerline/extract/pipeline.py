@@ -1,7 +1,8 @@
 """S4 claim extraction: text -> typed, normalized, span-anchored ClaimDraft rows.
 
-Offline and rules-based (FR-31): an optional Haiku refinement pass is not implemented, so
-what is measured here is exactly what runs. Per line of the source text:
+Rules first (FR-31), then the FR-32 LLM normalization pass (extract/refine.py), which may only
+null or re-map a claim's metric and target period and is a no-op offline. Per line of the
+source text:
 
   table row ("Revenue | $96,221 | ...")  -> reported/comparison claims, only when the table
                                             header states both the scale and the period
@@ -45,7 +46,7 @@ from ledgerline.extract.normalize import (
 from ledgerline.models import CallAudio, Claim, Company, Filing, Segment
 from ledgerline.schemas import ClaimDraft
 
-EXTRACTOR_VERSION = "s4-rules-3"
+EXTRACTOR_VERSION = "s4-llm-1"
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- cues
@@ -122,6 +123,11 @@ _ABBREV = {"inc", "corp", "co", "ltd", "u.s", "no", "vs", "st", "jr", "mr", "ms"
            "a.m", "calif", "wash", "ore", "approx", "e.g", "i.e", "n.a", "u.k", "dept"}
 
 # ---------------------------------------------------------------- helpers
+
+
+def _label_row(line: str) -> bool:
+    """"Cost of sales:" above its table rows."""
+    return line.endswith(":") and len(line) < 60
 
 
 def _key(fy: int, fp: str) -> tuple[int, int]:
@@ -627,9 +633,11 @@ def extract_claims(text: str, *, fiscal_year: int, fiscal_period: str,
     speaker_roles: (char_start, char_end, role); analyst and operator turns are skipped.
     Claims whose metric is outside CONCEPTS are returned as "qualitative" (see module doc).
     """
-    cands = _demote_partial_revenue(extract_candidates(
+    from ledgerline.extract.refine import refine
+
+    cands = refine(text, _demote_partial_revenue(extract_candidates(
         text, fiscal_year=fiscal_year, fiscal_period=fiscal_period, fiscal_year_end=fiscal_year_end,
-        use_ner=use_ner))
+        use_ner=use_ner)), fiscal_year, fiscal_period, fiscal_year_end)
     return _finish([d if d.metric or d.claim_type == "qualitative"
                     else d.model_copy(update={"claim_type": "qualitative", "comparison": None})
                     for d in cands], speaker_roles)
@@ -668,7 +676,7 @@ def extract_candidates(text: str, *, fiscal_year: int, fiscal_period: str,
             continue
         if re.match(r"\(\d{1,2}\)|\([a-z]\)", line):
             continue  # footnote: qualifies a table cell, not a management claim
-        label_row = line.endswith(":") and len(line) < 60
+        label_row = _label_row(line)
         if label_row:
             parent = line
         if table is not None and table.rows_seen:
