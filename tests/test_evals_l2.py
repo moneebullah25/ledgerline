@@ -71,3 +71,45 @@ def test_run_returns_gate_contract(monkeypatch):
 def test_no_predicted_contradiction_makes_headline_none(label):
     m, _ = l2.summarize([{"id": "g1", "gold": "contradicted"}], [], {"g1": {"label": label}})
     assert m["contradiction_precision"] is None and m["contradiction_recall"] == 0.0
+
+
+@pytest.mark.db
+def test_remap_current_prefers_same_type_then_overlap(db):
+    from datetime import UTC, date, datetime
+
+    from ledgerline.models import Claim, Company, Filing
+
+    co = Company(cik="0000320193", ticker="AAPL", name="Apple")
+    db.add(co)
+    db.flush()
+    f = Filing(company_id=co.id, accession_no="acc-1", form_type="8-K", filed_at=date(2025, 7, 31),
+               doc_url="u", storage_path="objects/x.htm", source_url="u",
+               fetched_at=datetime.now(UTC), sha256="0" * 64, license_note="t")
+    db.add(f)
+    db.flush()
+
+    def add(a, b, claim_type, comparison=None):
+        c = Claim(company_id=co.id, filing_id=f.id, fiscal_year=2025, fiscal_period="Q3",
+                  span_start=a, span_end=b, text="t" * (b - a), claim_type=claim_type,
+                  comparison=comparison, metric="revenue", value=5.0, unit="percent",
+                  extractor_version="s4-rules-2")
+        db.add(c)
+        db.flush()
+        return c
+
+    level = add(10, 30, "reported_result")      # exact span, wrong type
+    change = add(10, 45, "comparison", "yoy")   # same type and comparison
+    add(100, 120, "comparison", "yoy")          # no overlap
+    old = {"claim_type": "comparison", "comparison": "yoy"}
+    recs = [{"id": "g1", "gold": "supported", "accession_no": "acc-1", "span": [10, 30],
+             "claim": old},
+            {"id": "g2", "gold": "supported", "accession_no": "acc-1", "span": [10, 30],
+             "claim": {"claim_type": "reported_result", "comparison": None}},
+            {"id": "g3", "gold": "unverifiable", "accession_no": "acc-1", "span": [60, 80],
+             "claim": old}]
+    out, unmatched = l2.remap_current(db, recs)
+    assert unmatched == ["g3"]
+    assert [(r["id"], r["source_claim_id"], r["span"]) for r in out] == [
+        ("g1", change.id, [10, 45]), ("g2", level.id, [10, 30])]
+    assert out[0]["gold"] == "supported" and out[0]["extractor_version"] == "s4-rules-2"
+    assert out[0]["claim"]["value"] == 5.0  # a JSON float, as to_claim expects

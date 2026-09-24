@@ -60,7 +60,7 @@ ANNOTATOR = (
 )
 
 
-def _jsonable(v):
+def jsonable(v):
     return float(v) if isinstance(v, Decimal) else v
 
 
@@ -140,7 +140,7 @@ def sample(s: Session) -> list[dict]:
     claims = [{"source_claim_id": c.id, "ticker": t, "accession_no": acc,
                "extractor_version": c.extractor_version, "span": [c.span_start, c.span_end],
                "claim_type": c.claim_type, "metric": c.metric,
-               "claim": {k: _jsonable(getattr(c, k)) for k in FIELDS}}
+               "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}}
               for c, t, acc in rows]
     picked = stratified(claims, QUOTA)
     return [{"id": f"g{i + 1:03d}", **{k: v for k, v in c.items()

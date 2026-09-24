@@ -19,6 +19,14 @@ not touch, so only the ablated part changes):
   no_critic    the critic returns no weak point. Offline the critic only lowers confidence,
                so labels cannot change; the ablation is still run so an online run shows it.
   xbrl_only    every agent except the XBRL typed query answers `insufficient`.
+
+`--current` (eval_run name "l2_current") re-points every golden record at the claim the
+CURRENT extractor produced for the same filing and an overlapping span (preferring the same
+claim type and comparison, then the highest span IoU), keeping the frozen gold label.
+It measures the graph on today's extraction; records with no overlapping claim are listed as
+unmatched and left out. The perturbation set is built from the frozen snapshot, so it is not
+re-mapped (n_perturbed = 0). Caveat: the gold label judged the frozen claim's text; a
+re-mapped span that covers different words is still scored against it.
 """
 
 import argparse
@@ -32,11 +40,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ledgerline import llm
-from ledgerline.evals.golden import ANNOTATOR, GOLDEN, LABELS, PERTURBED, load, to_claim
+from ledgerline.evals.golden import (
+    ANNOTATOR,
+    FIELDS,
+    GOLDEN,
+    LABELS,
+    PERTURBED,
+    jsonable,
+    load,
+    to_claim,
+)
 from ledgerline.graph import build, critic
 from ledgerline.graph.adjudicator import IntegrityError, decide
 from ledgerline.graph.agents import filing_rag
-from ledgerline.models import Filing
+from ledgerline.models import Claim, Filing
 from ledgerline.schemas import CriticOutput, EvidenceItem
 from ledgerline.store.retrieval import search
 from ledgerline.tracing import Tracer
@@ -89,6 +106,30 @@ def _search_no_rerank(s: Session, query: str, company_id: int, lock):
                       rerank=False) if fids else []
 
 
+def _match_key(old: dict, a: int, b: int, c: Claim) -> tuple:
+    """Same claim type, same comparison, then span IoU; the lowest id breaks ties."""
+    iou = (min(b, c.span_end) - max(a, c.span_start)) / (max(b, c.span_end) - min(a, c.span_start))
+    return c.claim_type == old["claim_type"], c.comparison == old["comparison"], iou, -c.id
+
+
+def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
+    """(records re-pointed at the current claims table, ids with no overlapping claim)."""
+    out, unmatched = [], []
+    for r in recs:
+        (a, b), old = r["span"], r["claim"]
+        cands = s.scalars(select(Claim).join(Filing, Filing.id == Claim.filing_id).where(
+            Filing.accession_no == r["accession_no"], Claim.span_start < b,
+            Claim.span_end > a)).all()
+        if not cands:
+            unmatched.append(r["id"])
+            continue
+        c = max((_match_key(old, a, b, c), c) for c in cands)[1]  # key ends in the unique id
+        out.append(r | {"source_claim_id": c.id, "extractor_version": c.extractor_version,
+                        "span": [c.span_start, c.span_end],
+                        "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}})
+    return out, unmatched
+
+
 def predict(s: Session, recs: list[dict], override=lambda rid: {}) -> dict[str, dict]:
     """golden id -> {"label", "evidence": {agent: EvidenceItem}, "error"?}. A citation-integrity
     failure is recorded as ERROR (what the pipeline persists per claim, B2); anything else
@@ -139,14 +180,18 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
     }, {"real": m, "perturbed": mp, "combined": mc}
 
 
-def run(write: bool = False) -> dict:
-    """The §12 gate contract: {"metrics": {...}, "per_claim": {id: {"gold", "predicted"}}}."""
+def run(write: bool = False, current: bool = False) -> dict:
+    """The §12 gate contract: {"metrics": {...}, "per_claim": {id: {"gold", "predicted"}}}.
+    current=True scores the golden labels against today's claims (see module docstring)."""
     from ledgerline.db import engine
 
-    recs, pert = load(GOLDEN), (load(PERTURBED) if PERTURBED.exists() else [])
-    allr = recs + pert
+    recs, pert = load(GOLDEN), (load(PERTURBED) if PERTURBED.exists() and not current else [])
+    unmatched: list[str] = []
     # A plain Session that is never committed: the eval must not write claim/verdict rows.
     with Session(engine()) as s:
+        if current:
+            recs, unmatched = remap_current(s, recs)
+        allr = recs + pert
         full = predict(s, allr)
         abl = {}
         for name, (override, ctx) in ablations(full).items():
@@ -159,6 +204,8 @@ def run(write: bool = False) -> dict:
         metrics[f"ablation_{name}_contradiction_precision"] = am["contradiction_precision"]
         metrics[f"ablation_{name}_accuracy"] = am["accuracy"]
     per_claim = {r["id"]: {"gold": r["gold"], "predicted": full[r["id"]]["label"]} for r in allr}
+    if current:
+        metrics["n_unmatched"] = len(unmatched)
     result = {"metrics": metrics, "per_claim": per_claim}
     if write:
         from ledgerline.db import session
@@ -167,8 +214,11 @@ def run(write: bool = False) -> dict:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
                              check=False).stdout.strip() or None
         with session() as w:
-            w.add(EvalRun(git_sha=sha, layer="L2", metrics=metrics, details={
+            w.add(EvalRun(git_sha=sha, layer="L2", name="l2_current" if current else "L2",
+                          metrics=metrics, details={
                 "llm_available": llm.available(), "annotator": ANNOTATOR,
+                **({"unmatched": unmatched, "claim_ids": {
+                    r["id"]: r["source_claim_id"] for r in recs}} if current else {}),
                 "detail": detail, "ablations": ab_metrics, "per_claim": {
                     rid: {**v, "ablations": {n: abl[n][rid]["label"] for n in abl},
                           **({"error": full[rid]["error"]} if "error" in full[rid] else {})}
@@ -180,8 +230,10 @@ def run(write: bool = False) -> dict:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.l2")
     p.add_argument("--no-write", action="store_true", help="skip the eval_run row")
+    p.add_argument("--current", action="store_true",
+                   help="score gold labels against the current extractor's claims")
     a = p.parse_args(argv)
-    print(json.dumps(run(write=not a.no_write)["metrics"], indent=2))
+    print(json.dumps(run(write=not a.no_write, current=a.current)["metrics"], indent=2))
 
 
 if __name__ == "__main__":
