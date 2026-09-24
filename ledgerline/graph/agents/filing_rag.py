@@ -28,6 +28,7 @@ from ledgerline.graph.agents.xbrl_table import mentions_value
 from ledgerline.graph.state import Ctx
 from ledgerline.models import Claim, Filing
 from ledgerline.schemas import Citation, EvidenceItem, Stance
+from ledgerline.store import embed
 from ledgerline.store.retrieval import Hit, search
 
 K = 5  # reranked chunks judged
@@ -55,7 +56,8 @@ def _model():
 
 def nli(pairs: list[tuple[str, str]]) -> np.ndarray:
     """(premise, hypothesis) -> softmax probs, columns in the model's id2label order."""
-    logits = np.asarray(_model().predict(pairs))
+    with embed.INFERENCE_LOCK:
+        logits = np.asarray(_model().predict(pairs))
     e = np.exp(logits - logits.max(axis=1, keepdims=True))
     return e / e.sum(axis=1, keepdims=True)
 
