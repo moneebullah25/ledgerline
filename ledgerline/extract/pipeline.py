@@ -33,19 +33,19 @@ from ledgerline.extract.normalize import (
     SYNONYMS,
     Mention,
     Value,
-    _qualified,
     find_periods,
     hedging_score,
     match_metrics,
     parse_cell,
     parse_values,
+    qualifier_start,
     resolve_period,
     scaled,
 )
 from ledgerline.models import CallAudio, Claim, Company, Filing, Segment
 from ledgerline.schemas import ClaimDraft
 
-EXTRACTOR_VERSION = "s4-rules-2"
+EXTRACTOR_VERSION = "s4-rules-3"
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- cues
@@ -92,7 +92,7 @@ _BASELINE_END = re.compile(r";|,\s+and\b")
 _ZONE_END = re.compile(_BASELINE_END.pattern + r"|\s+to\s+(?=[$\d])")
 _RELATIVE = re.compile(r"(?:last|prior|previous|same period of|a year ago|corresponding period of)\s*$",
                        re.IGNORECASE)
-_DROP_AFTER = re.compile(r"^[^,;]{0,25}?(?:constant currency|currency[\s-]neutral)"
+_DROP_AFTER = re.compile(r"^[^,;]{0,25}?(?:constant currenc(?:y|ies)|currency[\s-]neutral)"
                          r"|^\s*(?:benefit|charge|impact|headwind|tailwind)", re.IGNORECASE)
 # A component of the number, not the number: "including a favorable impact of $0.11".
 _COMPONENT = re.compile(r"(?:\b(?:includ(?:e|es|ing|ed)|impact|benefit|charge|effect|contribut\w*)\b[^,;$%]*"
@@ -190,11 +190,19 @@ def _mentions(sent: str, use_ner: bool) -> list[Mention]:
             continue
         inside = [m for m in ms if gs <= m.start and m.end <= ge]
         for m in inside:
-            if m.metric and _qualified(sent[gs:m.start]):
-                m.metric = None  # GLiNER's wider span carries a segment qualifier
+            if m.metric and (q := qualifier_start(sent[gs:m.start])) is not None:
+                m.metric, m.start = None, gs + q  # GLiNER's wider span carries a segment qualifier
         if not inside and not any(m.start < ge and gs < m.end for m in ms):
             ms.append(Mention(gs, ge, None, bool(NON_GAAP.search(sent[max(0, gs - 20):ge]))))
     return sorted(ms, key=lambda m: m.start)
+
+
+def _as_loss(value: float, value_high: float | None) -> tuple[float, float | None]:
+    """A loss of $X is the signed concept at -X: "net loss of $1.2 billion" -> -1.2e9 and
+    "$(0.66)" stays -0.66; a range keeps low <= high."""
+    if value_high is None:
+        return -abs(value), None
+    return -max(abs(value), abs(value_high)), -min(abs(value), abs(value_high))
 
 
 def _baseline_zones(sent: str) -> list[tuple[int, int]]:
@@ -327,7 +335,7 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         if mention is None:
             continue
         between = sent[mention.end:v.start] if mention.end <= v.start else ""
-        if re.search(r"would have|constant currency|currency[\s-]neutral", between, re.IGNORECASE):
+        if re.search(r"would have|constant currenc(?:y|ies)|currency[\s-]neutral", between, re.IGNORECASE):
             continue
         if id(mention) not in last_end and re.search(r",\s+(?!includ|exclud)\w+ing\s", between):
             continue  # "record sales, ..., saving Prime members $1 billion": a clause with its own subject
@@ -391,6 +399,8 @@ def _sentence_claims(sent: str, base: int, ctx: _Ctx, fy: int, fp: str, fye: str
         value, value_high = v.value, v.value_high
         if change and cue_before and _NEGATIVE.match(cue_before["cue"]):
             value, value_high = (-value_high, -value) if value_high is not None else (-value, None)
+        elif mention.loss and not change:
+            value, value_high = _as_loss(value, value_high)
 
         # span: from the metric name (if it precedes) to the value, plus the yoy/qoq phrase
         start = min(v.start, mention.start) if mention in mentions else v.start
@@ -505,9 +515,10 @@ def _guidance_row(line: str, base: int, t: _Table) -> list[ClaimDraft]:
     """"Total revenue | $6.075 billion to $6.125 billion", "Earnings per share | GAAP: $4.27 to
     $4.32 | Non-GAAP: ..." -> one guidance claim from the GAAP (or only) column."""
     cells = line.split(" | ")
-    metric = _row_label(cells[0], t.parent)
-    if metric is None:
+    label = _row_label(cells[0], t.parent)
+    if label is None:
         return []
+    metric, loss = label
     header = t.header if t.header and len(t.header) == len(cells) else [""] * len(cells)
     offset = len(cells[0]) + 3
     for cell, head in zip(cells[1:], header[1:], strict=True):
@@ -529,6 +540,8 @@ def _guidance_row(line: str, base: int, t: _Table) -> list[ClaimDraft]:
             return []  # a bare "$9.2" with no stated scale is not a number we can store
         value = scaled(value, t.scale)
         value_high = scaled(value_high, t.scale) if value_high is not None else None
+    if loss and not change:
+        value, value_high = _as_loss(value, value_high)
     end = offset + v.end
     return [ClaimDraft(text=line[:end], span_start=base, span_end=base + end, claim_type="guidance",
                        metric=metric, value=value, value_high=value_high, unit=unit,
@@ -536,7 +549,8 @@ def _guidance_row(line: str, base: int, t: _Table) -> list[ClaimDraft]:
                        comparison="yoy" if change else None, hedging_score=hedging_score(line[:end]))]
 
 
-def _row_label(label: str, parent: str) -> str | None:
+def _row_label(label: str, parent: str) -> tuple[str, bool] | None:
+    """(metric, is_loss) for a table row label; "Net loss" is net_income with its sign flipped."""
     def norm(s: str) -> str:
         s = re.sub(r"\([^)]*\)|\*|\d+$|\battributable to (?!non)[\w.&]+", "", s, flags=re.IGNORECASE)
         s = s.strip().rstrip(":").strip().lower()
@@ -547,10 +561,9 @@ def _row_label(label: str, parent: str) -> str | None:
     if NON_GAAP.search(label) or NON_GAAP.search(parent):
         return None
     for cand in (norm(label), norm(f"{label} {parent}"), norm(f"{parent} {label}")):
-        if cand in SYNONYMS:
-            return SYNONYMS[cand]
-        if f"total {cand}" in SYNONYMS:
-            return SYNONYMS[f"total {cand}"]
+        for syn in (cand, f"total {cand}"):
+            if syn in SYNONYMS:
+                return SYNONYMS[syn], "loss" in syn
     return None
 
 
@@ -563,9 +576,10 @@ def _table_claims(line: str, base: int, t: _Table) -> list[ClaimDraft]:
     parsed = [parse_cell(c) for c in cells[1:]]
     if t.skip or not parsed or parsed[0] is None:
         return []
-    metric = _row_label(cells[0], t.parent)
-    if metric is None:
+    label = _row_label(cells[0], t.parent)
+    if label is None:
         return []
+    metric, loss = label
     raw, suffix = parsed[0]
     unit = CONCEPTS[metric].unit
     if unit == "percent" and (suffix == "%" or (abs(raw) <= 100 and "." in cells[1])):
@@ -582,6 +596,8 @@ def _table_claims(line: str, base: int, t: _Table) -> list[ClaimDraft]:
                 return []
             metric, unit = "gross_profit", "USD"
         value = scaled(raw, t.scale)
+    if loss:
+        value = -abs(value)
     period = t.period
     out = [ClaimDraft(text=line[:offsets[1][1]], span_start=base, span_end=base + offsets[1][1],
                       claim_type="reported_result", metric=metric, value=value, unit=unit,
@@ -691,11 +707,16 @@ def _demote_partial_revenue(drafts: list[ClaimDraft]) -> list[ClaimDraft]:
 
 def _finish(drafts: list[ClaimDraft], roles: list[tuple[int, int, str]] | None) -> list[ClaimDraft]:
     out, spans, facts = [], set(), set()
+    unmapped: dict[tuple, list[tuple[int, int]]] = {}  # metric-None fact -> spans kept
     for d in drafts:
-        fact = (d.claim_type, d.metric, d.value, d.value_high, d.comparison,
+        fact = (d.claim_type, d.metric, d.value, d.value_high, d.unit, d.comparison,
                 d.target_fiscal_year, d.target_fiscal_period)
         if (d.span_start, d.span_end) in spans or (d.metric and fact in facts):
             continue  # the same number restated (headline bullet, then body, then table)
+        # Without a metric the same value elsewhere may be another quantity, so only an
+        # overlapping span is the same claim: "sales increased 2% (2% ..." read twice.
+        if d.metric is None and any(a < d.span_end and d.span_start < b for a, b in unmapped.get(fact, ())):
+            continue
         if roles is not None:
             role = next((r for a, b, r in roles if a <= d.span_start < b), None)
             if role in ("analyst", "operator"):
@@ -703,6 +724,8 @@ def _finish(drafts: list[ClaimDraft], roles: list[tuple[int, int, str]] | None) 
             d = d.model_copy(update={"speaker_role": role})
         spans.add((d.span_start, d.span_end))
         facts.add(fact)
+        if d.metric is None:
+            unmapped.setdefault(fact, []).append((d.span_start, d.span_end))
         out.append(d)
     return out
 

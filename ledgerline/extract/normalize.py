@@ -340,7 +340,7 @@ _STOP = {"was", "were", "is", "are", "be", "and", "or", "of", "for", "in", "the"
          "it", "you"}
 # A basis other than the one XBRL reports: verifying these against GAAP facts is invalid.
 NON_GAAP = re.compile(
-    r"non-gaap|\badjusted\b|\bcomparable\b|\borganic\b|constant currency|currency[\s-]neutral"
+    r"non-gaap|\badjusted\b|\bcomparable\b|\borganic\b|constant currenc(?:y|ies)|currency[\s-]neutral"
     r"|\bexcluding\b|\bpro forma\b",
     re.IGNORECASE,
 )
@@ -354,26 +354,38 @@ class Mention:
     end: int
     metric: str | None  # None: a metric the vocabulary does not cover, or a qualified one
     non_gaap: bool = False
+    loss: bool = False  # "net loss", "loss from operations": the value is the negative of the concept
 
 
-def _qualified(prefix: str) -> bool:
-    """True when the words right before a metric name narrow it to a slice of the company."""
-    toks = _TOKEN.findall(prefix)
+def qualifier_start(prefix: str) -> int | None:
+    """Offset in `prefix` where the words that narrow the following metric name to a slice of
+    the company begin ("Data Center " -> 0), or None when nothing narrows it."""
+    toks = list(_TOKEN.finditer(prefix))
     verb = False
     for i in range(len(toks) - 1, max(-1, len(toks) - 6), -1):
-        tok = re.sub(r"\(\d+\)", "", toks[i])
+        tok = re.sub(r"\(\d+\)", "", toks[i][0])
         t = tok.lower().strip("()")
         if not re.match(r"\w", tok) or t in _STOP:
-            return False
+            return None
         if _VERB.match(t):
             verb = True
             continue
         if t in _NEUTRAL or _PERIODISH.match(t) or NON_GAAP.fullmatch(t):
             continue
         # A capitalised first word before a verb is the subject: "Adobe achieved record revenue".
-        initial = i == 0 or toks[i - 1] in _OPENERS
-        return not (initial and verb and tok[:1].isupper())
-    return False
+        initial = i == 0 or toks[i - 1][0] in _OPENERS
+        if initial and verb and tok[:1].isupper():
+            return None
+        # the whole qualifier: "Data" as well as "Center", "Google Cloud" as well as "Cloud"
+        while i > 0 and re.match(r"\w", toks[i - 1][0]) and not _is_plain(toks[i - 1][0]):
+            i -= 1
+        return toks[i].start()
+    return None
+
+
+def _is_plain(tok: str) -> bool:
+    t = tok.lower()
+    return t in _STOP or t in _NEUTRAL or bool(_VERB.match(t) or _PERIODISH.match(t) or NON_GAAP.fullmatch(t))
 
 
 def match_metrics(sentence: str) -> list[Mention]:
@@ -383,8 +395,14 @@ def match_metrics(sentence: str) -> list[Mention]:
     for m in _SYN_RX.finditer(sentence):
         metric: str | None = SYNONYMS[m[1].lower()]
         prefix, after = sentence[:m.start()], sentence[m.end():m.end() + 40]
-        if _qualified(prefix):
-            metric = None
+        start = m.start()
+        if (q := qualifier_start(prefix)) is not None:
+            metric, start = None, q  # the claim text keeps "Data Center" in front of "revenue"
+        loss = "loss" in m[1].lower()
+        if loss and re.match(r"\s+(?:on|from|related|associated|attributable to non)|\s*carry", after, re.IGNORECASE):
+            # "net loss on investments", "net operating loss carryforwards": not the concept, so
+            # the printed value is kept as printed
+            metric, loss = None, False
         if re.match(r"\s+(?:in|from|for)\s+(?!(?i:the|fiscal|fy|full|first|second|third|fourth|quarter|year)\b"
                     r"|Q[1-4]\b)[A-Z]", after):
             metric = None  # "Revenue in Intelligent Cloud", "Revenues for Converse"
@@ -397,7 +415,7 @@ def match_metrics(sentence: str) -> list[Mention]:
             metric = None  # "revenue run-rate", "revenue per employee": other quantities
         window = " ".join(_TOKEN.findall(prefix)[-4:]) + " " + after[:14]
         non_gaap = bool(NON_GAAP.search(window)) and not re.search(r"gaap and non-gaap", window, re.IGNORECASE)
-        out.append(Mention(m.start(), m.end(), metric, non_gaap))
+        out.append(Mention(start, m.end(), metric, non_gaap, loss))
     return out
 
 

@@ -286,3 +286,40 @@ def test_component_run_and_quarters_ended_header():
     table = ("Dollars in millions\nQuarters Ended June 30, | Six Months Ended June 30,\n"
              "2026 | 2025 | Inc/ (Dec) | 2026 | 2025\nRevenues | $7,099 | $6,843 | 4% | $13,616 | $12,799")
     assert facts(table, fp="Q2") == [("reported_result", "revenue", 7099e6, None, 2026, "Q2", None)]
+
+
+def test_segment_claims_keep_their_qualifier():
+    (c,) = claims("Data Center revenue was $89.0 billion.", fy=2027, fp="Q2")
+    assert (c.text, c.metric) == ("Data Center revenue was $89.0 billion", None)
+    (c,) = claims("Adobe achieved record Digital Media revenue of $4.2 billion.")
+    assert c.text == "Digital Media revenue of $4.2 billion"  # "record" is not part of the segment name
+
+
+def test_overlapping_unmapped_duplicates_merged():
+    got = claims("Systemwide sales increased 2% (2% in constant currencies).")
+    assert [(c.value, c.text) for c in got] == [(2.0, "Systemwide sales increased 2%")]
+    from ledgerline.extract.pipeline import _finish
+    from ledgerline.schemas import ClaimDraft
+
+    def d(a, b):
+        return ClaimDraft(text="x" * (b - a), span_start=a, span_end=b, claim_type="qualitative", value=0.7,
+                          unit="percent", target_fiscal_year=2026, target_fiscal_period="Q3", hedging_score=0.0)
+    # overlapping spans, same value: one claim; the same value elsewhere may be another quantity
+    assert [(c.span_start, c.span_end) for c in _finish([d(0, 40), d(19, 60), d(100, 120)], None)] == [
+        (0, 40), (100, 120)]
+
+
+def test_loss_phrases_extract_as_signed_concepts():
+    assert facts("Intel reported a net loss of $2.9 billion and net loss per share of $(0.66).") == [
+        ("reported_result", "net_income", -2.9e9, None, 2026, "Q3", None),
+        ("reported_result", "eps_diluted", -0.66, None, 2026, "Q3", None)]
+    assert facts("Operating loss was $500 million. Loss from operations was $(1,234) million.") == [
+        ("reported_result", "operating_income", -500e6, None, 2026, "Q3", None),
+        ("reported_result", "operating_income", -1234e6, None, 2026, "Q3", None)]
+    assert facts("We expect a net loss of $1.0 billion to $1.2 billion for the fourth quarter.") == [
+        ("guidance", "net_income", -1.2e9, -1.0e9, 2026, "Q4", None)]
+    # a change in a loss is a percent, not a signed level; a loss on something else is not net income
+    assert facts("Net loss widened 20% year over year.") == []
+    assert [(c.metric, c.value) for c in claims("Net loss on investments was $20 million.")] == [(None, 20e6)]
+    table = "(In millions)\nThree Months Ended\nJune 27, 2026 | June 28, 2025\nNet loss | (1,234) | 500\nOperating loss | 55 | 3"
+    assert [(c.metric, c.value) for c in claims(table)] == [("net_income", -1234e6), ("operating_income", -55e6)]

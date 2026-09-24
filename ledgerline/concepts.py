@@ -14,7 +14,9 @@ class Concept:
     name: str
     unit: str  # unit of the claim-facing value: USD | USD/share | percent
     tags: tuple[str, ...] = ()  # XBRL tags, preference order; empty for derived metrics
-    synonyms: tuple[str, ...] = ()  # phrases used in releases and on calls, lowercase
+    # Phrases used in releases and on calls, lowercase. A phrase containing "loss" names the
+    # same signed concept; extraction stores its value negative.
+    synonyms: tuple[str, ...] = ()
     # Derived metrics: (numerator, denominator) for ratios, or (minuend, subtrahend) for diffs.
     ratio_of: tuple[str, str] | None = None
     diff_of: tuple[str, str] | None = None
@@ -33,11 +35,13 @@ CONCEPTS: dict[str, Concept] = {c.name: c for c in [
     ), ("cost of revenue", "cost of sales", "cost of goods sold")),
     Concept("gross_profit", "USD", ("us-gaap:GrossProfit",), ("gross profit", "gross margin dollars")),
     Concept("operating_income", "USD", ("us-gaap:OperatingIncomeLoss",),
-            ("operating income", "income from operations", "operating profit")),
-    Concept("net_income", "USD", ("us-gaap:NetIncomeLoss",), ("net income", "net earnings", "net profit")),
+            ("operating income", "income from operations", "operating profit",
+             "operating loss", "loss from operations")),
+    Concept("net_income", "USD", ("us-gaap:NetIncomeLoss",), ("net income", "net earnings", "net profit", "net loss")),
     Concept("eps_diluted", "USD/share", ("us-gaap:EarningsPerShareDiluted",),
             ("diluted earnings per share", "diluted eps", "earnings per diluted share",
-             "diluted net income per share", "eps")),
+             "diluted net income per share", "eps",
+             "net loss per share", "diluted net loss per share", "net loss per diluted share")),
     Concept("rd_expense", "USD", ("us-gaap:ResearchAndDevelopmentExpense",),
             ("research and development", "r&d")),
     Concept("sga_expense", "USD", ("us-gaap:SellingGeneralAndAdministrativeExpense",),
