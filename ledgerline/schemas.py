@@ -115,6 +115,7 @@ def _renderings(v: float) -> set[float]:
     millions, or billions, rounded to what a writer would print. A negative value may also
     be printed as its magnitude ("net loss of $2.1 billion")."""
     out = set()
+    out |= {v, abs(v)}  # a value copied at full precision
     for x0 in {v, abs(v)}:
         for scale in (1, 1e3, 1e6, 1e9):
             x = x0 / scale

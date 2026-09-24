@@ -13,7 +13,6 @@ from ledgerline import llm
 from ledgerline.graph import load_prompt
 from ledgerline.graph.adjudicator import (
     TRUTH_AGENTS,
-    IntegrityError,
     add_usage,
     audit,
     decide,
@@ -89,10 +88,17 @@ def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:
             "evidence": json.dumps([e.model_dump() for e in evidence])}
     cites = [c for e in evidence for c in e.citations]
     total = llm.Usage()
+    instruction = "Argue the other side."
     for _ in range(2):
-        out, usage = llm.structured("standard", system, data, "Argue the other side.", CriticOutput)
+        out, usage = llm.structured("standard", system, data, instruction, CriticOutput)
         total = add_usage(total, usage)
         # The argument can be quoted in the rationale: same number and vocabulary rules.
         if not (problems := audit(out.argument, cites, claim.text)):
             return out, total
-    raise IntegrityError(f"critic argument failed audit twice: {problems}", total)
+        # Details quote model output, so they go in a data block, not the instruction (A6).
+        data = data | {"rejected_answer_problems": json.dumps(problems)}
+        instruction = ("Argue the other side. Your previous argument was rejected; the "
+                       "rejected_answer_problems document lists why.")
+    # The critic is advisory: an argument that keeps failing the audit is replaced by the
+    # deterministic offline critic instead of costing the claim its verdict. Spend is kept.
+    return critique_offline(claim, evidence), total

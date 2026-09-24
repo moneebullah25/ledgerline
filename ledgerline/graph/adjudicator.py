@@ -186,17 +186,17 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
         instruction = (f"Adjudicate the claim. Your previous answer was rejected for "
                        f"{len(problems)} problem(s) of kind {', '.join(kinds)}; the "
                        "rejected_answer_problems document lists them.")
-    if any(p.startswith("label mismatch") for p in problems):
-        # A3: the rule's label wins. The online critic's argument is unaudited against the
-        # offline rationale's citations, so the offline critic replaces it.
-        from ledgerline.graph.critic import critique_offline  # critic imports this module
-        try:
-            v = _adjudicate_offline(claim, evidence, critique_offline(claim, evidence))
-        except IntegrityError as e:
-            e.usage = total
-            raise
-        return v, total, None
-    raise IntegrityError(f"adjudicator output failed audit twice: {problems}", total)
+    # A3 and FR-45: after the retry, a wrong label or a rationale that still fails the audit
+    # falls back to the rule's verdict, whose templated rationale is audited below. The
+    # online critic's argument is unaudited against those citations, so the offline critic
+    # replaces it. Only an offline failure (a bug) still raises.
+    from ledgerline.graph.critic import critique_offline  # critic imports this module
+    try:
+        v = _adjudicate_offline(claim, evidence, critique_offline(claim, evidence))
+    except IntegrityError as e:
+        e.usage = total
+        raise
+    return v, total, None
 
 
 def add_usage(a: llm.Usage, b: llm.Usage) -> llm.Usage:

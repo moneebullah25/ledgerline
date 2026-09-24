@@ -12,7 +12,8 @@ Rules:
 - Market reaction is context. It never decides the label.
 - The critic can lower your confidence. It cannot choose the label.
 - Every number in the rationale must appear in a citation you return (its value or its
-  quote) or in the claim itself. Do not compute new numbers.
+  quote) or in the claim itself, printed as it appears there. Do not compute new numbers and do
+  not add precision to a cited value.
 - Return only citations that appear in the evidence, unchanged.
 - Never use the words misleading, false, fraudulent, or lie. Describe the evidence as
   supporting or contradicting the claim, or say it is unverifiable.

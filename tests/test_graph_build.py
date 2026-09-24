@@ -210,12 +210,13 @@ def test_online_bad_then_good(online):
     assert "97.2" in data["rejected_answer_problems"]
 
 
-def test_online_both_bad_raises_with_usage(online):
+def test_online_both_bad_falls_back_to_offline_with_usage(online):
     bad = V(rationale="The claim is misleading.")
     online(bad, bad)
-    with pytest.raises(adjudicator.IntegrityError, match="banned") as exc:
-        adjudicator.adjudicate(CLAIM, [XBRL], None)
-    assert exc.value.usage.input_tokens == 200
+    v, u, model = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert model is None and u.input_tokens == 200  # rule verdict; both calls still priced
+    assert v.label == "supported" and "misleading" not in v.rationale
+    assert adjudicator.audit(v.rationale, v.citations, CLAIM.text) == []
 
 
 def test_online_fabricated_citation_value_is_replaced_and_caught(online):
@@ -262,13 +263,13 @@ def test_online_forecast_only_must_be_unverifiable(online):
     assert v.label == "unverifiable"
 
 
-def test_online_critic_retries_on_uncited_number_then_raises(online):
+def test_online_critic_retries_on_uncited_number_then_falls_back(online):
     online(CriticOutput(counter_stance="contradicts", argument="Revenue was really 97.2 billion."),
            CriticOutput(counter_stance="contradicts", argument="The fact is derived."))
     out, _ = critic.critique(CLAIM, [XBRL])
     assert out.argument == "The fact is derived."
     bad = CriticOutput(counter_stance="contradicts", argument="This is a lie.")
-    online(bad, bad)
-    with pytest.raises(adjudicator.IntegrityError) as exc:
-        critic.critique(CLAIM, [XBRL])
-    assert exc.value.usage is not None
+    seen = online(bad, bad)
+    out, u = critic.critique(CLAIM, [XBRL])
+    assert out == critic.critique_offline(CLAIM, [XBRL]) and u.input_tokens > 0
+    assert "rejected_answer_problems" in seen[-1][1]  # the retry says why
