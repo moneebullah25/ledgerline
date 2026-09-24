@@ -73,13 +73,13 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 # Round 2 — panel re-check (2026-09-24): testing-reality-checker, engineering-code-reviewer, security-appsec-engineer
 
 ## F. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `.github/**`)
-- [ ] F1 Report source values: upserts can now change cited rows; `_source` must keep the verdict's cited value when the row differs and add a "since revised: <new value>" note, and the report-time audit must accept the cited value.
-- [ ] F2 POST /v1/reports: add `rerun: bool = false` (still key-gated) so a done report can be recomputed; default stays deduped.
-- [ ] F3 Heartbeat per extracted filing/call inside `_ensure_claims`; refresh `report.config` from the DB before writing the heartbeat (no stale-dict clobber of `attempts`).
-- [ ] F4 eval-gate path filter: add `ledgerline/schemas.py`, `ledgerline/concepts.py`, `ledgerline/llm.py`, `ledgerline/evals/**`, `ledgerline/ingest/**`.
-- [ ] F5 B2 widened: any per-claim exception (model refusal/ValueError, API/overload errors, adjudicator wiring error) becomes a refused `unverifiable` verdict whose rationale names the error class; spend recorded from spans and `err.usage`. Only DB/infrastructure errors fail the report.
-- [ ] F6 Mode: record `report.config["mode"]` ("online"/"offline") from `llm.available()` at run time and show that, not an inference from verdict.model. Integrity/error verdicts render as "(no verdict: <reason>)", not "(refused: no evidence)".
-- [ ] F7 Report layout: group findings by label (contradicted, then unverifiable, then supported), severity-ranked within each group, so refusals never sit above findings.
+- [x] F1 Report source values: upserts can now change cited rows; `_source` must keep the verdict's cited value when the row differs and add a "since revised: <new value>" note, and the report-time audit must accept the cited value.
+- [x] F2 POST /v1/reports: add `rerun: bool = false` (still key-gated) so a done report can be recomputed; default stays deduped.
+- [x] F3 Heartbeat per extracted filing/call inside `_ensure_claims`; refresh `report.config` from the DB before writing the heartbeat (no stale-dict clobber of `attempts`).
+- [x] F4 eval-gate path filter: add `ledgerline/schemas.py`, `ledgerline/concepts.py`, `ledgerline/llm.py`, `ledgerline/evals/**`, `ledgerline/ingest/**`.
+- [x] F5 B2 widened: any per-claim exception (model refusal/ValueError, API/overload errors, adjudicator wiring error) becomes a refused `unverifiable` verdict whose rationale names the error class; spend recorded from spans and `err.usage`. Only DB/infrastructure errors fail the report.
+- [x] F6 Mode: record `report.config["mode"]` ("online"/"offline") from `llm.available()` at run time and show that, not an inference from verdict.model. Integrity/error verdicts render as "(no verdict: <reason>)", not "(refused: no evidence)".
+- [x] F7 Report layout: group findings by label (contradicted, then unverifiable, then supported), severity-ranked within each group, so refusals never sit above findings.
 
 ## G. Ingest (`ingest/**`, `store/__main__.py`)
 - [x] G1 Upserts compare the full stored tuple with IS DISTINCT FROM (xbrl: value, derived, fiscal_year, fiscal_period, duration_days, form, filed; market: close, adj_close, volume, sha256), so parser fixes and pre-0004 `sha256='unrecorded'` rows are corrected. Deviation: market compares close/adj_close within 1e-6 relative (Yahoo float32 wobble) plus volume, and rewrites sha256 only when stored `unrecorded` (the response hash differs every call). Backfill: facts 0, prices 12012 corrected.
