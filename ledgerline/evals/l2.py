@@ -20,9 +20,13 @@ not touch, so only the ablated part changes):
                so labels cannot change; the ablation is still run so an online run shows it.
   xbrl_only    every agent except the XBRL typed query answers `insufficient`.
 
+A claim whose verification raises is scored as a refused `unverifiable` (what the pipeline
+stores, F5) and counted in `errors`; database errors and ImportError propagate.
+
 `--current` (eval_run name "l2_current") re-points every golden record at the claim the
-CURRENT extractor produced for the same filing and an overlapping span (preferring the same
-claim type and comparison, then the highest span IoU), keeping the frozen gold label.
+current extractor (EXTRACTOR_VERSION) produced for the same filing and an overlapping span
+(preferring the same claim type and comparison, then the highest span IoU, then the newest
+claim), keeping the frozen gold label.
 It measures the graph on today's extraction; records with no overlapping claim are listed as
 unmatched and left out. The perturbation set is built from the frozen snapshot, so it is not
 re-mapped (n_perturbed = 0). Caveat: the gold label judged the frozen claim's text; a
@@ -37,6 +41,7 @@ from contextlib import nullcontext
 from unittest.mock import patch
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ledgerline import llm
@@ -50,15 +55,14 @@ from ledgerline.evals.golden import (
     load,
     to_claim,
 )
+from ledgerline.extract.pipeline import EXTRACTOR_VERSION
 from ledgerline.graph import build, critic
-from ledgerline.graph.adjudicator import IntegrityError, decide
+from ledgerline.graph.adjudicator import decide
 from ledgerline.graph.agents import filing_rag
 from ledgerline.models import Claim, Filing
 from ledgerline.schemas import CriticOutput, EvidenceItem
 from ledgerline.store.retrieval import search
 from ledgerline.tracing import Tracer
-
-ERROR = "error"  # verify_claim raised (citation integrity); counts as wrong for every label
 
 
 def prf(pairs: list[tuple[str, str]]) -> dict:
@@ -107,9 +111,9 @@ def _search_no_rerank(s: Session, query: str, company_id: int, lock):
 
 
 def _match_key(old: dict, a: int, b: int, c: Claim) -> tuple:
-    """Same claim type, same comparison, then span IoU; the lowest id breaks ties."""
+    """Same claim type, same comparison, then span IoU; the newest (highest id) breaks ties."""
     iou = (min(b, c.span_end) - max(a, c.span_start)) / (max(b, c.span_end) - min(a, c.span_start))
-    return c.claim_type == old["claim_type"], c.comparison == old["comparison"], iou, -c.id
+    return c.claim_type == old["claim_type"], c.comparison == old["comparison"], iou, c.id
 
 
 def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
@@ -118,8 +122,8 @@ def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
     for r in recs:
         (a, b), old = r["span"], r["claim"]
         cands = s.scalars(select(Claim).join(Filing, Filing.id == Claim.filing_id).where(
-            Filing.accession_no == r["accession_no"], Claim.span_start < b,
-            Claim.span_end > a)).all()
+            Filing.accession_no == r["accession_no"], Claim.extractor_version == EXTRACTOR_VERSION,
+            Claim.span_start < b, Claim.span_end > a)).all()
         if not cands:
             unmatched.append(r["id"])
             continue
@@ -131,9 +135,9 @@ def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
 
 
 def predict(s: Session, recs: list[dict], override=lambda rid: {}) -> dict[str, dict]:
-    """golden id -> {"label", "evidence": {agent: EvidenceItem}, "error"?}. A citation-integrity
-    failure is recorded as ERROR (what the pipeline persists per claim, B2); anything else
-    propagates, so a broken graph fails the eval instead of scoring as a wrong label."""
+    """golden id -> {"label", "refused", "evidence": {agent: EvidenceItem}, "error"?}. A claim
+    whose verification raises scores as the pipeline stores it: a refused `unverifiable`
+    (F5). Database errors and ImportError propagate: they would fail every claim alike."""
     out = {}
     for r in recs:
         with patch.dict(build.AGENTS, override(r["id"])):
@@ -141,8 +145,11 @@ def predict(s: Session, recs: list[dict], override=lambda rid: {}) -> dict[str, 
                 res = build.verify_claim(s, to_claim(s, r), Tracer())
                 out[r["id"]] = {"label": res.verdict.label, "refused": res.refused,
                                 "evidence": {e.agent: e for e in res.evidence}}
-            except IntegrityError as e:
-                out[r["id"]] = {"label": ERROR, "evidence": {}, "error": str(e)}
+            except (SQLAlchemyError, ImportError):
+                raise
+            except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
+                out[r["id"]] = {"label": "unverifiable", "refused": True, "evidence": {},
+                                "error": f"{type(e).__name__}: {e}"}
     return out
 
 
@@ -176,7 +183,7 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
         "perturbed_contradiction_recall": mp["contradicted"]["recall"],
         "combined_contradiction_precision": mc["contradicted"]["precision"],
         "n_real": len(recs), "n_perturbed": len(pert),
-        "errors": sum(p["label"] == ERROR for p in pred.values()),
+        "errors": sum("error" in p for p in pred.values()),
     }, {"real": m, "perturbed": mp, "combined": mc}
 
 

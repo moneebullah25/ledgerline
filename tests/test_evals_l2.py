@@ -1,8 +1,10 @@
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from ledgerline import llm
 from ledgerline.evals import gate, l2
 from ledgerline.graph import build
+from ledgerline.graph.adjudicator import IntegrityError
 from ledgerline.schemas import Citation, EvidenceItem
 
 
@@ -19,9 +21,23 @@ def test_prf_per_label_and_undefined_cases():
     assert l2.prf([])["accuracy"] is None
 
 
-def test_error_counts_as_wrong_for_every_label():
-    m = l2.prf([("contradicted", l2.ERROR), ("supported", "supported")])
-    assert m["contradicted"]["recall"] == 0.0 and m["contradicted"]["precision"] is None
+def test_verification_error_scores_as_refused_unverifiable(monkeypatch):
+    monkeypatch.setattr(l2, "to_claim", lambda s, r: None)
+
+    def boom(*_):
+        raise IntegrityError("uncited numbers")
+    monkeypatch.setattr(build, "verify_claim", boom)
+    out = l2.predict(None, [{"id": "g1"}])
+    assert out["g1"]["label"] == "unverifiable" and out["g1"]["refused"]
+    assert out["g1"]["error"].startswith("IntegrityError")
+    m, _ = l2.summarize([{"id": "g1", "gold": "contradicted"}], [], out)
+    assert m["errors"] == 1 and m["contradiction_recall"] == 0.0
+
+    def db_down(*_):
+        raise OperationalError("select", {}, Exception("gone"))
+    monkeypatch.setattr(build, "verify_claim", db_down)
+    with pytest.raises(OperationalError):
+        l2.predict(None, [{"id": "g1"}])
 
 
 def test_headline_uses_real_set_only():
@@ -88,17 +104,19 @@ def test_remap_current_prefers_same_type_then_overlap(db):
     db.add(f)
     db.flush()
 
-    def add(a, b, claim_type, comparison=None):
+    def add(a, b, claim_type, comparison=None, version=l2.EXTRACTOR_VERSION):
         c = Claim(company_id=co.id, filing_id=f.id, fiscal_year=2025, fiscal_period="Q3",
                   span_start=a, span_end=b, text="t" * (b - a), claim_type=claim_type,
                   comparison=comparison, metric="revenue", value=5.0, unit="percent",
-                  extractor_version="s4-rules-2")
+                  extractor_version=version)
         db.add(c)
         db.flush()
         return c
 
     level = add(10, 30, "reported_result")      # exact span, wrong type
-    change = add(10, 45, "comparison", "yoy")   # same type and comparison
+    add(5, 40, "comparison", "yoy")             # same type and comparison, IoU 20/35, older
+    change = add(10, 45, "comparison", "yoy")   # same IoU, newer: wins the tie
+    add(10, 45, "comparison", "yoy", version="s0-old")  # another extractor version: ignored
     add(100, 120, "comparison", "yoy")          # no overlap
     old = {"claim_type": "comparison", "comparison": "yoy"}
     recs = [{"id": "g1", "gold": "supported", "accession_no": "acc-1", "span": [10, 30],
@@ -111,5 +129,5 @@ def test_remap_current_prefers_same_type_then_overlap(db):
     assert unmatched == ["g3"]
     assert [(r["id"], r["source_claim_id"], r["span"]) for r in out] == [
         ("g1", change.id, [10, 45]), ("g2", level.id, [10, 30])]
-    assert out[0]["gold"] == "supported" and out[0]["extractor_version"] == "s4-rules-2"
+    assert out[0]["gold"] == "supported" and out[0]["extractor_version"] == l2.EXTRACTOR_VERSION
     assert out[0]["claim"]["value"] == 5.0  # a JSON float, as to_claim expects

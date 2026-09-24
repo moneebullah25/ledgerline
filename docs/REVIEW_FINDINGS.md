@@ -95,4 +95,4 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 ## I. Extraction + evals (`extract/**`, `concepts.py` synonyms, `evals/l2.py`, `evals/l4.py`)
 - [ ] I1 Segment claims keep their qualifier in the claim text ("Data Center revenue was $89.0 billion"), and overlapping-span duplicates are merged for metric=None claims too.
 - [ ] I2 Loss synonyms: "net loss", "operating loss", "loss from operations", "net loss per share" extract as the signed concept with a negative value.
-- [ ] I3 L4 and `l2 --current` filter on the current EXTRACTOR_VERSION; `--current` tie-break prefers the newest claim; L2 docstring/ERROR mapping matches the pipeline (refused unverifiable).
+- [x] I3 L4 and `l2 --current` filter on the current EXTRACTOR_VERSION; `--current` tie-break prefers the newest claim; L2 docstring/ERROR mapping matches the pipeline (refused unverifiable).
