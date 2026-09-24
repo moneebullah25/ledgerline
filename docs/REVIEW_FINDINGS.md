@@ -69,3 +69,30 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] E5 `non_claim` bucket precision 0.611 (real claims discarded): reduce false discards (3 comparisons, 2 guidance, 2 reported results in the gold set).
 - [x] E6 Guidance recall: parse guidance tables and cue-less forward-looking bullets where the scale and target period are explicit.
 - [x] E7 Re-run extraction over all releases, re-link, and report the before/after table (claims per release, guidance precision on a hand check, NER/typing eval). Keep gold sets frozen (do not tune against them; report results on them honestly).
+
+# Round 2 — panel re-check (2026-09-24): testing-reality-checker, engineering-code-reviewer, security-appsec-engineer
+
+## F. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `.github/**`)
+- [ ] F1 Report source values: upserts can now change cited rows; `_source` must keep the verdict's cited value when the row differs and add a "since revised: <new value>" note, and the report-time audit must accept the cited value.
+- [ ] F2 POST /v1/reports: add `rerun: bool = false` (still key-gated) so a done report can be recomputed; default stays deduped.
+- [ ] F3 Heartbeat per extracted filing/call inside `_ensure_claims`; refresh `report.config` from the DB before writing the heartbeat (no stale-dict clobber of `attempts`).
+- [ ] F4 eval-gate path filter: add `ledgerline/schemas.py`, `ledgerline/concepts.py`, `ledgerline/llm.py`, `ledgerline/evals/**`, `ledgerline/ingest/**`.
+- [ ] F5 B2 widened: any per-claim exception (model refusal/ValueError, API/overload errors, adjudicator wiring error) becomes a refused `unverifiable` verdict whose rationale names the error class; spend recorded from spans and `err.usage`. Only DB/infrastructure errors fail the report.
+- [ ] F6 Mode: record `report.config["mode"]` ("online"/"offline") from `llm.available()` at run time and show that, not an inference from verdict.model. Integrity/error verdicts render as "(no verdict: <reason>)", not "(refused: no evidence)".
+- [ ] F7 Report layout: group findings by label (contradicted, then unverifiable, then supported), severity-ranked within each group, so refusals never sit above findings.
+
+## G. Ingest (`ingest/**`, `store/__main__.py`)
+- [ ] G1 Upserts compare the full stored tuple with IS DISTINCT FROM (xbrl: value, derived, fiscal_year, fiscal_period, duration_days, form, filed; market: close, adj_close, volume, sha256), so parser fixes and pre-0004 `sha256='unrecorded'` rows are corrected.
+- [ ] G2 `python -m ledgerline.store verify-offsets`: re-slices every stored chunk (and claim span) against current `load_text`; exits non-zero on any mismatch. Run it and record the result.
+
+## H. Graph (`graph/**`, `schemas.py`) — after the L2 agent finishes
+- [ ] H1 Adjudicator label-mismatch fallback: use the offline critic (or none), attach usage to any IntegrityError, and return usage with model=None so the verdict is not labelled online.
+- [ ] H2 A3 gap: label mismatch plus another problem after the retry also falls back to the offline rule (not raise).
+- [ ] H3 Loss sign: `_LOSS` matches "loss from operations"; the `_INCOME` veto applies only to the mention attached to the value; change claims on a negative base ("net loss widened 20%") compare magnitudes.
+- [ ] H4 `printed_half_ulp` handles basis points ("120 basis points" = 1.20 pp).
+- [ ] H5 `uncited_numbers`: currency prefixes € £ USD, hyphenated scales ("25-billion"), any whitespace before the unit.
+
+## I. Extraction + evals (`extract/**`, `concepts.py` synonyms, `evals/l2.py`, `evals/l4.py`)
+- [ ] I1 Segment claims keep their qualifier in the claim text ("Data Center revenue was $89.0 billion"), and overlapping-span duplicates are merged for metric=None claims too.
+- [ ] I2 Loss synonyms: "net loss", "operating loss", "loss from operations", "net loss per share" extract as the signed concept with a negative value.
+- [ ] I3 L4 and `l2 --current` filter on the current EXTRACTOR_VERSION; `--current` tie-break prefers the newest claim; L2 docstring/ERROR mapping matches the pipeline (refused unverifiable).
