@@ -141,3 +141,43 @@ def test_mentions_value_any_scale():
     fell = C("revenue fell 5% year over year", -5.0, unit="percent", claim_type="comparison",
              comparison="yoy")
     assert mentions_value("Revenue decreased 5% compared with last year.", fell)
+
+
+def test_flat_is_a_whole_percent_zero():
+    claim = C("revenue was $12.7 billion, flat year-over-year", 0.0, unit="percent",
+              claim_type="comparison", comparison="yoy")
+    assert printed_half_ulp(claim.text, 0.0, "percent") == 0.5
+    assert assess(claim, [F(12_667e6), F(12_724e6, fy=2024)]).stance == "supports"   # -0.4%
+    assert assess(claim, [F(12_630e6), F(12_724e6, fy=2024)]).stance == "contradicts"  # -0.7%
+
+
+@pytest.mark.parametrize("text,value", [
+    ("EPS includes an expected gain from the exit of the Glad Joint Venture in the range of $0.10",
+     0.10),
+    (("EPS includes a gain of $0.10 to $0.13 per share and restructuring charges of $0.12 to "
+      "$0.25 per share"), 0.25),
+    ("$0.30 of diluted earnings per share", 0.30),
+])
+def test_component_of_eps_is_insufficient_not_compared_with_total(text, value):
+    claim = C(text, value, unit="USD/share", metric="eps_diluted")
+    ev = assess(claim, [F(6.62, unit="USD/share", concept="eps_diluted")])
+    assert ev.stance == "insufficient" and "component" in ev.summary
+
+
+def test_total_with_an_included_part_is_still_compared():
+    claim = C("Diluted EPS, including a charge of $0.10, was $2.00", 2.0, unit="USD/share",
+              metric="eps_diluted")
+    assert assess(claim, [F(2.0, unit="USD/share", concept="eps_diluted")]).stance == "supports"
+    assert assess(C("diluted EPS of $0.30", 0.3, unit="USD/share", metric="eps_diluted"),
+                  [F(6.62, unit="USD/share", concept="eps_diluted")]).stance == "contradicts"
+
+
+def test_company_defined_free_cash_flow_mismatch_is_insufficient():
+    parts = (F(27_988e6, concept="operating_cash_flow", ids=(1,)),
+             F(14_425e6, concept="capex", ids=(2,)))
+    fcf = F(13_563e6, concept="free_cash_flow", ids=(1, 2), components=parts)
+    claim = C("Free cash flow was $13.15 billion", 13.15e9, metric="free_cash_flow")
+    ev = assess(claim, [fcf])
+    assert ev.stance == "insufficient" and ev.payload["actual"] == 13_563e6
+    assert assess(C("Free cash flow was $13.56 billion", 13.56e9, metric="free_cash_flow"),
+                  [fcf]).stance == "supports"

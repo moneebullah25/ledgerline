@@ -11,6 +11,19 @@ the last printed digit of the percent ("grew 5%" allows 4.4..5.6 with PP_TOL=0.1
 For margin concepts (already percent) the change is the difference in points. An absolute
 change in dollars allows REL_TOL * (|current| + |base|): both filed values carry rounding.
 
+"Flat" prints no digit; it is read as a change that rounds to 0 at whole-percent precision,
+the same half unit a printed "0%" would get (so -0.4% is flat, -0.7% is not).
+
+Parts of a metric are not the metric: a claimed number led by "includes" / "impact of" /
+"charges of" / "contributed", or followed by "of diluted earnings per share" ("the 53rd week
+adds $0.30 of diluted EPS"), is a component, and comparing it with the filed total says
+nothing. Such claims are `insufficient`.
+
+Company-defined measures (free cash flow): the derived OCF - capex is one common definition,
+not the company's. A match supports; a mismatch may be a different definition (META also
+subtracts finance-lease principal payments, which no mapped tag carries), so it is
+`insufficient`, never a contradiction.
+
 Loss claims: "net loss of $2.1 billion" is extracted as +2.1e9 while NetIncomeLoss is filed
 as -2.1e9, so a positive value in a loss-phrased claim on a signed metric is compared as
 negative. A loss claim against a filed profit (or the reverse) is then a contradiction.
@@ -33,6 +46,7 @@ from threading import Lock
 from sqlalchemy.orm import Session
 
 from ledgerline.concepts import CONCEPTS
+from ledgerline.extract.normalize import parse_values
 from ledgerline.graph.state import Ctx
 from ledgerline.llm import OFFLINE, Usage
 from ledgerline.models import Claim
@@ -49,6 +63,12 @@ _TOKEN = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.(\d+))?")
 _SIGNED = {"net_income", "operating_income", "eps_diluted", "free_cash_flow"}
 _LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss per\b", re.IGNORECASE)
 _INCOME = re.compile(r"\b(?:income|earnings|profit)\b", re.IGNORECASE)
+_FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
+# ponytail: cue words only; "revenue including acquisitions was $5B" also reads as a part.
+_PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charges?|effects?"
+                          r"|contribut\w*)\b[^,;$%]*$", re.IGNORECASE)
+_PART_AFTER = re.compile(r"^\s*of\s+(?:\w+\s+){0,2}(?:earnings per share|eps)\b", re.IGNORECASE)
+_COMPANY_DEFINED = {"free_cash_flow"}
 
 
 def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
@@ -61,6 +81,8 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
         for scale in _SCALES:
             if x and math.isclose(x * scale, abs(value), rel_tol=1e-6):
                 return 0.5 * 10 ** -len(tok.partition(".")[2]) * scale
+    if unit == "percent" and value == 0 and _FLAT.search(text):
+        return 0.5
     return 0.0
 
 
@@ -133,8 +155,21 @@ def _loss_claim(claim: Claim) -> bool:
             and not _INCOME.search(claim.text))
 
 
+def _is_part(claim: Claim) -> bool:
+    """Is the claimed number a component of the metric rather than its total?"""
+    claimed = [abs(float(x)) for x in (claim.value, claim.value_high) if x is not None]
+    return any(
+        (_PART_BEFORE.search(claim.text[:v.start]) or _PART_AFTER.match(claim.text[v.end:]))
+        and any(x is not None and math.isclose(abs(x), c, rel_tol=1e-6)
+                for x in (v.value, v.value_high) for c in claimed)
+        for v in parse_values(claim.text))
+
+
 def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     """Pure comparison of the claim against pre-fetched facts ([target] or [target, base])."""
+    if _is_part(claim):
+        return _insufficient(f"the claimed figure is a component of {claim.metric}, "
+                             "not the filed total")
     if any(f is None for f in facts):
         return _insufficient(
             f"no filed XBRL fact for {claim.metric} in the needed period(s)",
@@ -183,6 +218,9 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     cites.append(Citation(kind="computed", ref_id=f"{ref}:tolerance", value=tol, unit=claim.unit))
 
     ok = abs(err) <= tol
+    if not ok and claim.metric in _COMPANY_DEFINED:
+        return _insufficient(f"{claim.metric} is company-defined; the derived definition does "
+                             "not match and no filed fact carries the company's", actual=actual)
     return EvidenceItem(
         agent="xbrl_table",
         stance="supports" if ok else "contradicts",
