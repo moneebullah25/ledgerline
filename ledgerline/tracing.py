@@ -11,10 +11,15 @@ from sqlalchemy.orm import Session
 
 from ledgerline.models import Span
 
+# Exception types whose message is written for the reader (a missing quarter, an unsupported
+# request). Anything else, e.g. a DB error quoting SQL or an integrity failure quoting
+# rejected model output, is summarised by class name only; the traceback goes to the log.
+_READABLE = (LookupError, ValueError)
+
 
 def error_summary(e: BaseException, limit: int = 300) -> str:
-    """Class and a bounded message: what an API reader may see. Tracebacks go to the log."""
-    msg = " ".join(str(e).split())
+    """Class and a bounded message: what an API reader may see."""
+    msg = " ".join(str(e).split()) if isinstance(e, _READABLE) else ""
     return f"{type(e).__name__}: {msg[:limit]}" if msg else type(e).__name__
 
 

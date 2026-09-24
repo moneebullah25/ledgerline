@@ -35,7 +35,7 @@ def ingest_call_audio(s: Session, path_or_url: str, *, kind: str, company_id: in
     if suffix not in AUDIO_SUFFIXES:
         raise ValueError(f"not an audio file type ({suffix or 'no suffix'}): {path_or_url}")
     if url.scheme:
-        if url.scheme != "https" or url.hostname not in settings().audio_hosts:
+        if url.scheme != "https" or url.hostname not in {h.lower() for h in settings().audio_hosts}:
             raise ValueError(f"audio URL not allowed (https + LEDGERLINE_AUDIO_HOSTS): {path_or_url}")
         data, source_url = get(path_or_url, {}, max_bytes=MAX_AUDIO_BYTES), path_or_url
     else:

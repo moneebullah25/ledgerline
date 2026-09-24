@@ -48,7 +48,14 @@ class ResponseTooLarge(ValueError):
     pass
 
 
-_client = httpx.Client(timeout=30, follow_redirects=True)
+def _https_only(req: httpx.Request) -> None:
+    # Checked on every hop BEFORE it is sent: checking the final URL after httpx followed the
+    # redirects would already have sent a request to an http:// or internal target.
+    if req.url.scheme != "https":
+        raise ValueError(f"refusing non-https request {req.url}")
+
+
+_client = httpx.Client(timeout=30, follow_redirects=True, event_hooks={"request": [_https_only]})
 _backoff = wait_exponential_jitter(initial=1, max=60)
 
 

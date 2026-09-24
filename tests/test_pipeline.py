@@ -131,7 +131,7 @@ def test_failure_keeps_finished_claims_and_marks_failed(db, monkeypatch):
     _install_fakes(monkeypatch, fail_on=2)
     r = _report(db)
     run_report(db, r.id)
-    assert r.status == "failed" and r.error == "RuntimeError: graph exploded"  # no traceback
+    assert r.status == "failed" and r.error == "RuntimeError"  # class only: no traceback, no internals
     assert r.finished_at is not None
     assert len(db.scalars(select(Verdict).where(Verdict.report_id == r.id)).all()) == 1
     assert r.cost_usd == pytest.approx(0.02)  # B5: the committed claim's spend survives

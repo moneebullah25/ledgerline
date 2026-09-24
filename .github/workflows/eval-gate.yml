@@ -8,6 +8,10 @@ on:
       - "ledgerline/extract/**"
       - "ledgerline/store/**"
 
+# Accepted risk: this job runs PR code while holding pull-requests: write, so PR code could
+# tamper with the comment step. Fork PRs get a read-only token, so it only matters for
+# same-repo branches, whose authors already have write access. The full fix is a separate
+# workflow_run job that posts an uploaded artifact.
 permissions:
   contents: read
   pull-requests: write

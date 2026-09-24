@@ -26,6 +26,7 @@ from ledgerline.models import CallAudio
 
 PAGE = "https://www.federalreserve.gov/monetarypolicy/fomcpresconf{d}.htm"
 PDF = "https://www.federalreserve.gov/mediacenter/files/FOMCpresconf{d}.pdf"
+FFMPEG_TIMEOUT_S = 2 * 3600  # a press conference is ~1 h; a never-ending live playlist is not
 LICENSE = ("Federal Reserve Board; 'Unless otherwise indicated, information on Board's website "
            "is in the public domain' (federalreserve.gov/disclaimer.htm). Audio track of the "
            "press-conference video embedded on the Board's page; transcript is the Board's PDF.")
@@ -105,7 +106,8 @@ def ingest_fomc_eval_set(s: Session, dates: list[str]) -> list[int]:
             subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error",
                             "-protocol_whitelist", "https,tls,tcp,crypto,hls",
                             "-i", _audio_manifest(page), "-vn", "-c:a", "copy",
-                            "-fs", str(MAX_AUDIO_BYTES), str(audio)], check=True)
+                            "-fs", str(MAX_AUDIO_BYTES), str(audio)],
+                           check=True, timeout=FFMPEG_TIMEOUT_S)
             pdf_path.write_bytes(pdf)
             text = subprocess.run(["pdftotext", str(pdf_path), "-"], check=True,
                                   capture_output=True, text=True).stdout
