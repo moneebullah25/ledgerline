@@ -39,7 +39,7 @@ Cost of that alternative:
   keys, and a report's rows commit together.
 - `docker compose up` needs one stateful service, which is what makes NFR-6 cheap.
 - Ceiling: HNSW in Postgres degrades past tens of millions of vectors and competes with
-  OLTP load; BM25 via `ts_rank_cd` is weaker than a real BM25 implementation. If the
+  OLTP load; Postgres full-text ranking (`ts_rank`, chosen over `ts_rank_cd` on the L1 eval: sparse Recall@10 0.620 vs 0.467) has no IDF term and is weaker than a real BM25 implementation. If the
   corpus grows by orders of magnitude, the dense leg is the first thing to move out.
 - The queue has no priorities, delays or dead-letter queue; stale-job recovery is
   application code (`worker.sweep_stale`).

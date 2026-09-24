@@ -71,7 +71,7 @@ def index_filing(s: Session, filing_id: int) -> int                 # chunks wri
 def search(s: Session, query: str, *, company_id: int, k: int = 10,
            filing_ids: list[int] | None = None, rerank: bool = True) -> list[Hit]
 # Hit(chunk_id, filing_id, section_path, text, score, char_start, char_end)
-# BM25-style leg: Postgres tsvector + ts_rank_cd; dense leg: pgvector cosine (hnsw);
+# BM25-style leg: Postgres tsvector + ts_rank (measured better than ts_rank_cd; neither is BM25); dense leg: pgvector cosine (hnsw);
 # fused with reciprocal rank fusion (k=60); optional cross-encoder rerank.
 ```
 
