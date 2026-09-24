@@ -7,8 +7,10 @@ import types
 from datetime import date
 
 import pytest
+import sqlalchemy as sa
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from test_report_generate import PROV
 
 from ledgerline.llm import Usage
@@ -33,7 +35,8 @@ class FakeIntegrityError(RuntimeError):
 
 
 def _install_fakes(monkeypatch, *, fail_on: int | None = None,
-                   integrity_fail_on: int | None = None) -> list[int]:
+                   integrity_fail_on: int | None = None,
+                   error: Exception | None = None) -> list[int]:
     extracted: list[int] = []
 
     def extract_for_filing(s, filing_id):
@@ -55,13 +58,15 @@ def _install_fakes(monkeypatch, *, fail_on: int | None = None,
     def verify_claim(s, claim, tracer):
         calls["n"] += 1
         if calls["n"] == fail_on:
-            raise RuntimeError("graph exploded")
+            raise error or OperationalError("SELECT 1", {}, Exception("db gone"))
         with tracer.span("verify_claim", claim_id=claim.id):  # as graph.build does
             with tracer.span("agent.xbrl_table") as a:
                 a["cost_usd"] = 0.005
                 time.sleep(0.002)
             if calls["n"] == integrity_fail_on:
-                raise FakeIntegrityError("adjudicator output failed audit twice: [97.1]")
+                err = FakeIntegrityError("adjudicator output failed audit twice: [97.1]")
+                err.usage = types.SimpleNamespace(cost_usd=0.001)
+                raise err
         fact = Citation(kind="xbrl_fact", ref_id=1, value=94.0e9, unit="USD")
         contradicted = claim.hedging_score == 0.0
         return FakeResult(
@@ -118,7 +123,7 @@ def test_run_report_extracts_verifies_and_ranks(db, monkeypatch):
     assert xbrl.latency_ms >= 2  # B4: read from the `agent.xbrl_table` span
     names = db.scalars(select(Span.name).where(Span.trace_id == verdicts[0].trace_id)).all()
     assert sorted(names) == ["agent.xbrl_table", "verify_claim"]  # one verify_claim span
-    assert "heartbeat_at" in r.config
+    assert "heartbeat_at" in r.config and r.config["mode"] == "offline"  # conftest: no LLM
 
     # A second run neither re-extracts nor re-verifies.
     run_report(db, r.id)
@@ -131,7 +136,7 @@ def test_failure_keeps_finished_claims_and_marks_failed(db, monkeypatch):
     _install_fakes(monkeypatch, fail_on=2)
     r = _report(db)
     run_report(db, r.id)
-    assert r.status == "failed" and r.error == "RuntimeError"  # class only: no traceback, no internals
+    assert r.status == "failed" and r.error == "OperationalError"  # class only, no internals
     assert r.finished_at is not None
     assert len(db.scalars(select(Verdict).where(Verdict.report_id == r.id)).all()) == 1
     assert r.cost_usd == pytest.approx(0.02)  # B5: the committed claim's spend survives
@@ -164,10 +169,38 @@ def test_integrity_failure_is_one_refused_claim_not_a_failed_report(db, monkeypa
     bad = verdicts[0]
     assert (bad.label, bad.refused, bad.confidence, bad.citations) == ("unverifiable", True, 0, [])
     assert "97.1" not in bad.rationale  # the failed text and its numbers are not shown
-    assert bad.cost_usd == pytest.approx(0.005)  # spend recorded on the finished agent span
-    assert r.cost_usd == pytest.approx(0.025)
+    assert "citation-integrity" in bad.rationale
+    assert bad.cost_usd == pytest.approx(0.006)  # the finished agent span + err.usage
+    assert r.cost_usd == pytest.approx(0.026)
     names = db.scalars(select(Span.name).where(Span.trace_id == bad.trace_id)).all()
     assert sorted(names) == ["agent.xbrl_table", "verify_claim"]
+
+
+@pytest.mark.db
+@pytest.mark.parametrize("err", [RuntimeError("model refused"), ValueError("wiring")])
+def test_any_claim_error_is_a_refused_verdict_naming_the_class(db, monkeypatch, err):
+    _install_fakes(monkeypatch, fail_on=1, error=err)
+    r = _report(db)
+    run_report(db, r.id)
+    assert r.status == "done"
+    bad = db.scalars(select(Verdict).where(Verdict.report_id == r.id)
+                     .order_by(Verdict.claim_id)).first()
+    assert (bad.label, bad.refused) == ("unverifiable", True)
+    assert bad.rationale == f"No verdict: {type(err).__name__} while verifying the claim."
+    assert str(err) not in bad.rationale
+
+
+@pytest.mark.db
+def test_heartbeat_does_not_clobber_attempts_written_elsewhere(db, monkeypatch):
+    _install_fakes(monkeypatch)
+    r = _report(db)
+    r.config = {"attempts": 1}
+    db.flush()
+    # The worker (another session) bumps attempts behind this session's in-memory dict.
+    db.execute(sa.text("UPDATE report SET config = config || '{\"attempts\": 2}' WHERE id = :id"),
+               {"id": r.id})
+    run_report(db, r.id)
+    assert r.status == "done" and r.config["attempts"] == 2
 
 
 def test_deviation_reads_the_agent_payload_magnitude():

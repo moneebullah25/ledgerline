@@ -1,5 +1,6 @@
-# §12: a PR touching retrieval, extraction or the verification graph is blocked if L2
-# contradiction precision drops more than 2 points (absolute) below main's baseline.
+# §12: a PR touching anything L2 depends on (ingest, retrieval, extraction, the verification
+# graph, schemas/concepts/llm, the eval harness) is blocked if L2 contradiction precision
+# drops more than 2 points (absolute) below main's baseline.
 name: eval-gate
 on:
   pull_request:
@@ -7,6 +8,11 @@ on:
       - "ledgerline/graph/**"
       - "ledgerline/extract/**"
       - "ledgerline/store/**"
+      - "ledgerline/ingest/**"
+      - "ledgerline/evals/**"
+      - "ledgerline/schemas.py"
+      - "ledgerline/concepts.py"
+      - "ledgerline/llm.py"
 
 # Accepted risk: this job runs PR code while holding pull-requests: write, so PR code could
 # tamper with the comment step. Fork PRs get a read-only token, so it only matters for

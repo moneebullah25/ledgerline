@@ -7,8 +7,8 @@ any number of workers can poll without double-running a report.
 SIGTERM/SIGINT: finish the current report, then exit. If the process is killed anyway,
 the report stays 'running'; the stale sweep re-queues it once its heartbeat is older than
 STALE_AFTER, and run_report resumes at the first claim without a verdict. run_report
-refreshes the heartbeat on every claim commit, so a long but live report is never swept
-and run twice. After MAX_ATTEMPTS starts it is marked failed instead, so a report that
+refreshes the heartbeat after each extracted filing/call and each claim commit, so a long
+but live report is never swept and run twice. After MAX_ATTEMPTS starts it is marked failed instead, so a report that
 crashes the process cannot loop forever. Start time, heartbeat and attempt count live in
 report.config (started_at, heartbeat_at, attempts) to avoid a schema change.
 """

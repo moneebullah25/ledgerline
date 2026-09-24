@@ -53,6 +53,7 @@ class ReportRequest(BaseModel):
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Za-z.\-]+$")
     fiscal_year: int = Field(ge=2000, le=2100)
     fiscal_period: Literal["Q1", "Q2", "Q3", "Q4", "FY"]
+    rerun: bool = False  # recompute even if a done report exists (a queued/running one is reused)
 
     @field_validator("fiscal_period")
     @classmethod
@@ -214,7 +215,8 @@ def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
 @app.post("/v1/reports", status_code=202, dependencies=[Depends(require_api_key)])
 def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
     """Idempotent per (company, quarter): an existing queued, running or done report is
-    returned instead of a new one. Only a failed report is re-run by POSTing again."""
+    returned instead of a new one. A failed report is re-run by POSTing again; a done one
+    only with `rerun: true`."""
     company = _company(s, body.ticker)
     key = (company.id, body.fiscal_year, body.fiscal_period)
     # Serialise POSTs for the same quarter so two concurrent requests cannot both insert.
@@ -222,7 +224,7 @@ def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
     report = s.scalar(select(Report).where(
         Report.company_id == company.id, Report.fiscal_year == body.fiscal_year,
         Report.fiscal_period == body.fiscal_period,
-        Report.status.in_(("queued", "running", "done")),
+        Report.status.in_(("queued", "running") if body.rerun else ("queued", "running", "done")),
     ).order_by(Report.created_at.desc()).limit(1))
     if report is None:
         queued = s.scalar(select(func.count()).where(Report.status == "queued"))

@@ -5,11 +5,14 @@
 Transactions: one commit per claim. A claim's evidence, verdict and trace spans land
 together or not at all, and a crash keeps every claim finished before it. A re-run of the
 same report skips claims that already have a verdict, so the worker can safely re-queue a
-report whose process died (see worker.py). Each claim commit also refreshes
-report.config["heartbeat_at"], which is what the worker's stale sweep watches.
+report whose process died (see worker.py). Each extracted filing/call and each claim commit
+also refreshes report.config["heartbeat_at"], which is what the worker's stale sweep watches.
+report.config["mode"] records whether the run had LLM credentials (online/offline).
 
-A claim whose verdict fails the citation-integrity check (FR-45) is stored as a refused
-`unverifiable` verdict and the report goes on; any other error fails the report.
+A claim whose verification raises (citation-integrity failure (FR-45), model refusal, API
+or overload error, adjudicator wiring bug) is stored as a refused `unverifiable` verdict
+naming the error class, and the report goes on. Only database errors, or a missing
+dependency (ImportError), fail the report: they would fail every claim the same way.
 """
 
 import argparse
@@ -21,10 +24,13 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from sqlalchemy import exists, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from ledgerline import llm
 from ledgerline.llm import Usage
 from ledgerline.models import CallAudio, Claim, Company, Evidence, Filing, Report, Segment, Verdict
+from ledgerline.report.generate import NO_VERDICT
 from ledgerline.report.severity import load_weights, severity
 from ledgerline.tracing import Tracer, error_summary
 
@@ -46,6 +52,8 @@ def _ensure_claims(s: Session, report: Report) -> list[Claim]:
     )).all()
     for filing_id in releases:
         extract_for_filing(s, filing_id)
+        _heartbeat(s, report)
+        s.commit()
 
     calls = s.scalars(select(CallAudio.id).where(
         CallAudio.company_id == report.company_id, CallAudio.kind == "earnings_call",
@@ -60,6 +68,8 @@ def _ensure_claims(s: Session, report: Report) -> list[Claim]:
 
             process_call(s, call_id)
         extract_for_call(s, call_id)
+        _heartbeat(s, report)
+        s.commit()
 
     return list(s.scalars(select(Claim).where(
         Claim.company_id == report.company_id, Claim.fiscal_year == report.fiscal_year,
@@ -124,8 +134,8 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
     tracer.flush(s)
 
 
-def _persist_integrity_failure(s: Session, report: Report, claim: Claim, tracer: Tracer,
-                               prompt_version: str, err: Exception) -> None:
+def _persist_no_verdict(s: Session, report: Report, claim: Claim, tracer: Tracer,
+                        prompt_version: str, err: Exception, reason: str) -> None:
     """FR-45 held: no verdict text that failed the audit is stored or shown. The spend is:
     what the finished nodes recorded on their spans, plus the failed call's usage if the
     error carries one (the verify_claim span only gets a total on success)."""
@@ -134,15 +144,18 @@ def _persist_integrity_failure(s: Session, report: Report, claim: Claim, tracer:
     cost += usage.cost_usd if usage is not None else 0.0
     s.add(Verdict(
         report_id=report.id, claim_id=claim.id, label="unverifiable", confidence=0.0,
-        rationale="No verdict: the generated rationale failed the citation-integrity check.",
+        rationale=f"{NO_VERDICT}{reason}.",
         citations=[], severity=0.0, refused=True, prompt_version=prompt_version, model=None,
         cost_usd=cost, trace_id=tracer.trace_id,
     ))
     tracer.flush(s)
 
 
-def _heartbeat(report: Report) -> None:
-    report.config = {**report.config, "heartbeat_at": datetime.now(UTC).isoformat()}
+def _heartbeat(s: Session, report: Report, **extra) -> None:
+    """Re-read config first: the worker writes `attempts` there, and a stale in-memory
+    dict written back would clobber it."""
+    s.refresh(report, ["config"])
+    report.config = {**report.config, **extra, "heartbeat_at": datetime.now(UTC).isoformat()}
 
 
 def _total_cost(s: Session, report_id: uuid.UUID) -> float:
@@ -160,8 +173,8 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
         raise ValueError(f"no report {report_id}")
     t0 = time.perf_counter()
     report.status = "running"
-    now = datetime.now(UTC).isoformat()
-    report.config = {**report.config, "started_at": now, "heartbeat_at": now}
+    _heartbeat(s, report, started_at=datetime.now(UTC).isoformat(),
+               mode="online" if llm.available() else "offline")
     s.commit()
     try:
         # Inside try: a broken import fails the report.
@@ -172,8 +185,6 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
         if report.fiscal_period == "FY":
             raise ValueError(FY_UNSUPPORTED)
         claims = _ensure_claims(s, report)
-        _heartbeat(report)
-        s.commit()
         if not claims:
             raise LookupError(
                 f"no claims for FY{report.fiscal_year} {report.fiscal_period}: no 8-K earnings "
@@ -185,14 +196,18 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
             tracer = Tracer()
             try:
                 result = verify_claim(s, claim, tracer)
-            except CitationIntegrityError as e:
-                log.exception("report %s claim %s: citation-integrity failure", report_id,
-                              claim.id)
-                _persist_integrity_failure(s, report, claim, tracer,
-                                           load_prompt("adjudicator")[1], e)
+            except (SQLAlchemyError, ImportError):
+                raise
+            except Exception as e:
+                log.exception("report %s claim %s: no verdict", report_id, claim.id)
+                reason = ("the generated rationale failed the citation-integrity check"
+                          if isinstance(e, CitationIntegrityError)
+                          else f"{type(e).__name__} while verifying the claim")
+                _persist_no_verdict(s, report, claim, tracer, load_prompt("adjudicator")[1],
+                                    e, reason)
             else:
                 _persist(s, report, claim, result, tracer)
-            _heartbeat(report)
+            _heartbeat(s, report)
             s.commit()
         report.status, report.error = "done", None
     except Exception as e:  # any failure must end as status='failed', not 'running'

@@ -2,12 +2,13 @@
 reader can open. Numbers shown come from the cited rows themselves (NFR-8), and each
 finding carries the result of the citation-integrity check on its rationale."""
 
+import math
 import textwrap
 import uuid
 from datetime import datetime
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from ledgerline.models import (
@@ -28,6 +29,10 @@ from ledgerline.schemas import Citation, uncited_numbers
 COST_BUDGET_USD = 3.00
 LATENCY_BUDGET_S = 20 * 60
 OFFLINE = "offline (no LLM credentials)"
+NO_VERDICT = "No verdict: "  # rationale prefix of a claim whose verification raised
+# Findings first, then what could not be checked, then what checks out.
+_LABEL_ORDER = case({"contradicted": 0, "unverifiable": 1, "supported": 2},
+                    value=Verdict.label, else_=3)
 
 
 class Source(BaseModel):
@@ -38,6 +43,7 @@ class Source(BaseModel):
     quote: str | None = None
     value: float | None = None
     unit: str | None = None
+    revised: float | None = None  # the row's current value, when it differs from the cited one
 
 
 class Finding(BaseModel):
@@ -68,7 +74,7 @@ class ReportView(BaseModel):
     latency_s: float | None
     cost_usd: float | None
     error: str | None
-    mode: str | None  # "online" if any verdict came from a model, else OFFLINE; None: no claims
+    mode: str | None  # "online" or OFFLINE, as recorded when the run started; None: never run
     warnings: list[str]  # budget overruns (NFR-1 latency, NFR-3 cost)
     claims: list[Finding]
 
@@ -124,8 +130,13 @@ def _source(c: Citation, resolved: dict[tuple[str, str], Source]) -> Source:
     if base is None:  # forecast outputs, or a row that no longer exists: show what was cited
         return Source(kind=c.kind, ref_id=c.ref_id, label=f"{c.kind} {c.ref_id}",
                       quote=c.quote, value=c.value, unit=c.unit)
-    # The agent's exact quote beats the whole chunk; the row's value beats the agent's copy.
-    return base.model_copy(update={"quote": c.quote or base.quote})
+    # The agent's exact quote beats the whole chunk. The verdict was judged against the
+    # cited value; if an upsert has since changed the row, show both.
+    update: dict = {"quote": c.quote or base.quote}
+    if (c.value is not None and base.value is not None
+            and not math.isclose(c.value, base.value, rel_tol=1e-9)):
+        update |= {"value": c.value, "revised": base.value}
+    return base.model_copy(update=update)
 
 
 def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
@@ -138,7 +149,7 @@ def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
     pairs = s.execute(
         select(Verdict, Claim).join(Claim, Claim.id == Verdict.claim_id)
         .where(Verdict.report_id == report_id)
-        .order_by(Verdict.severity.desc(), Verdict.confidence.desc(), Claim.id)
+        .order_by(_LABEL_ORDER, Verdict.severity.desc(), Verdict.confidence.desc(), Claim.id)
     ).all()
     cites = {v.id: [Citation.model_validate(c) for c in v.citations] for v, _ in pairs}
     resolved = _resolve(s, company.cik, [c for cs in cites.values() for c in cs])
@@ -146,7 +157,7 @@ def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
     findings = []
     for v, claim in pairs:
         sources = [_source(c, resolved) for c in cites[v.id]]
-        # Audit against what the reader sees: resolved row values, never the verdict's own copy.
+        # Audit against what the reader sees: resolved sources (the cited value when revised).
         shown = [Citation(kind=x.kind, ref_id=x.ref_id, value=x.value, quote=x.quote)
                  for x in sources]
         findings.append(Finding(
@@ -157,7 +168,7 @@ def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
             sources=sources,
             uncited_numbers=uncited_numbers(v.rationale, shown, claim.text),
         ))
-    mode = ("online" if any(f.model for f in findings) else OFFLINE) if findings else None
+    mode = {"online": "online", "offline": OFFLINE}.get(report.config.get("mode"))
     warnings = []
     if report.cost_usd is not None and report.cost_usd > COST_BUDGET_USD:
         warnings.append(f"cost {report.cost_usd:.2f} USD is over the {COST_BUDGET_USD:.2f} USD "
@@ -193,9 +204,13 @@ def to_markdown(view: ReportView) -> str:
     if view.error:
         lines += ["", f"error: `{view.error}`"]
     for rank, f in enumerate(view.claims, 1):
+        if f.refused and f.rationale.startswith(NO_VERDICT):
+            note = f" (no verdict: {f.rationale.removeprefix(NO_VERDICT).rstrip('.')})"
+        else:
+            note = " (refused: no evidence)" if f.refused else ""
         lines += [
             "",
-            (f"## {rank}. {f.label}{' (refused: no evidence)' if f.refused else ''} "
+            (f"## {rank}. {f.label}{note} "
              f"`confidence {f.confidence:.2f}` `severity {f.severity:.2f}`"),
             "",
             f"> {f.text}",
@@ -207,6 +222,8 @@ def to_markdown(view: ReportView) -> str:
             line = f"- {src.label}"
             if src.value is not None:
                 line += f": {_fmt(src.value)} {src.unit or ''}".rstrip()
+            if src.revised is not None:
+                line += f" (since revised: {_fmt(src.revised)} {src.unit or ''}".rstrip() + ")"
             if src.quote:
                 line += f' "{textwrap.shorten(src.quote, 300)}"'
             if src.url:

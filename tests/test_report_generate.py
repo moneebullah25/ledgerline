@@ -50,7 +50,7 @@ def seed_report(s, n_claims: int = 3, ticker: str = "AAPL") -> Report:
     price = MarketPrice(ticker=ticker, day=date(2025, 8, 1), close=202.38, adj_close=202.38,
                         source_url="https://example.com/prices", **PROV)
     report = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q3", status="done",
-                    latency_s=12.5, cost_usd=0.41, finished_at=NOW)
+                    latency_s=12.5, cost_usd=0.41, finished_at=NOW, config={"mode": "offline"})
     s.add_all([fact, chunk, price, report])
     s.flush()
     for i in range(n_claims):
@@ -130,18 +130,21 @@ def test_unknown_report(db):
 
 
 @pytest.mark.db
-def test_audit_uses_resolved_rows_not_the_verdicts_copy(db):
-    """B3: a verdict whose citation copy carries a fabricated value cannot vouch for it."""
+def test_revised_row_keeps_the_cited_value_and_shows_the_revision(db):
+    """F1: the verdict was judged on the cited value; an upsert since then is shown, not
+    silently swapped in (the audit accepts the cited value, never an uncited one)."""
     report = seed_report(db, n_claims=1)
     v = db.query(Verdict).filter_by(report_id=report.id).one()
     fact_id = v.citations[0]["ref_id"]
     v.citations = [Citation(kind="xbrl_fact", ref_id=fact_id, value=91.2e9, unit="USD")
                    .model_dump()]
-    v.rationale = "Filed revenue was $91.2 billion."
+    v.rationale = "Filed revenue was $91.2 billion, not $90 billion."
     db.flush()
-    finding = build_report(db, report.id).claims[0]
-    assert finding.sources[0].value == 94036000000.0  # the row wins
-    assert finding.uncited_numbers == [91.2]
+    view = build_report(db, report.id)
+    src = view.claims[0].sources[0]
+    assert (src.value, src.revised) == (91.2e9, 94036000000.0)
+    assert view.claims[0].uncited_numbers == [90.0]
+    assert "91,200,000,000 USD (since revised: 94,036,000,000 USD)" in to_markdown(view)
 
 
 @pytest.mark.db
@@ -174,8 +177,29 @@ def test_offline_mode_and_budget_warnings_are_shown(db):
     assert "mode: offline (no LLM credentials)" in md
     assert "over the 3.00 USD budget" in md and "over the 20 min budget" in md
 
-    db.query(Verdict).filter_by(report_id=report.id).one().model = "claude-opus-5"
+    report.config = {"mode": "online"}  # recorded at run time, not inferred from verdicts
     report.cost_usd, report.latency_s = 0.4, 60.0
     db.flush()
     view = build_report(db, report.id)
     assert (view.mode, view.warnings) == ("online", [])
+
+
+@pytest.mark.db
+def test_findings_grouped_by_label_and_no_verdict_rendered(db):
+    """F7: contradicted, then unverifiable, then supported, whatever the severity.
+    F6: a claim whose verification raised says so, not "refused: no evidence"."""
+    report = seed_report(db, n_claims=4)
+    vs = db.query(Verdict).filter_by(report_id=report.id).order_by(Verdict.claim_id).all()
+    vs[1].label, vs[1].severity = "supported", 5.0
+    vs[2].label, vs[2].refused, vs[2].severity = "unverifiable", True, 0.0
+    vs[2].rationale = "No evidence."
+    vs[3].label, vs[3].refused, vs[3].severity = "unverifiable", True, 0.0
+    vs[3].rationale = "No verdict: RuntimeError while verifying the claim."
+    vs[3].citations = []
+    db.flush()
+    view = build_report(db, report.id)
+    assert [f.label for f in view.claims] == [
+        "contradicted", "unverifiable", "unverifiable", "supported"]
+    md = to_markdown(view)
+    assert "unverifiable (no verdict: RuntimeError while verifying the claim)" in md
+    assert md.count("(refused: no evidence)") == 1

@@ -60,6 +60,17 @@ def test_post_dedupes_per_quarter_and_reruns_only_failed(client, db):
 
 
 @pytest.mark.db
+def test_post_rerun_recomputes_a_done_report(client, db):
+    done = seed_report(db, n_claims=0)
+    body = {"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q3", "rerun": True}
+    fresh = client.post("/v1/reports", json=body).json()["job_id"]
+    assert fresh != str(done.id)
+    assert client.post("/v1/reports", json=body).json()["job_id"] == fresh  # queued: reused
+    client.headers.pop("X-API-Key")
+    assert client.post("/v1/reports", json=body).status_code == 401  # still key-gated
+
+
+@pytest.mark.db
 def test_post_caps_the_queue(client, db, monkeypatch):
     seed_report(db, n_claims=0)
     monkeypatch.setattr(api, "MAX_QUEUED", 1)
