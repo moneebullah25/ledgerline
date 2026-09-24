@@ -28,6 +28,8 @@ def test_claim_draft_rejects_value_without_unit():
 @pytest.mark.parametrize("text", [
     "Revenue was $25 billion.", "Capex was $2,050 million.", "Sales grew 12%.",
     "Margin rose 3 points.", "Revenue reached 2050 million USD.", "A $ 7 charge.",
+    "Revenue was €25 billion.", "Revenue was £25 billion.", "Revenue was USD 25 billion.",
+    "A 25-billion buyback.", "Revenue of 25  billion.", "Revenue of 25\nbillion.",
 ])
 def test_amounts_are_not_exempt_as_ordinals_or_years(text):
     assert uncited_numbers(text, []) != []
@@ -35,6 +37,7 @@ def test_amounts_are_not_exempt_as_ordinals_or_years(text):
 
 def test_bare_ordinals_and_years_stay_exempt():
     assert uncited_numbers("In fiscal 2025 Q3, 4 agents ran over 12 months.", []) == []
+    assert uncited_numbers("Per the 10-K and the 8-K.", []) == []
 
 
 def test_negative_cited_value_may_print_as_magnitude():

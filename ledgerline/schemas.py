@@ -97,10 +97,11 @@ class VerdictDraft(BaseModel):
 
 
 _NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
-# A number next to one of these is an amount, never an ordinal or a year.
-_UNIT_BEFORE = re.compile(r"\$\s?$")
+# A number next to one of these is an amount, never an ordinal or a year. A hyphen joins only
+# a spelled-out scale ("25-billion"): "10-K" is a form name.
+_UNIT_BEFORE = re.compile(r"(?:[$€£]|\busd)\s*$", re.IGNORECASE)
 _UNIT_AFTER = re.compile(
-    r"\s?(?:%|(?:percent|per cent|percentage|points?|pp|bps|basis|thousand|million|billion"
+    r"(?:\s*|-(?![kmb]\b))(?:%|(?:percent|per cent|percentage|points?|pp|bps|basis|thousand|million|billion"
     r"|trillion|usd|bn|mn|[kmb])\b)", re.IGNORECASE)
 _SMALL = 32
 

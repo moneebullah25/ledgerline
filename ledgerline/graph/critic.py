@@ -70,13 +70,17 @@ def critique(claim: Claim, evidence: list[EvidenceItem]) -> tuple[CriticOutput, 
     stance, _ = decide(claim, evidence)
     if llm.available():
         return _critique_llm(claim, evidence, stance)
+    return critique_offline(claim, evidence), llm.OFFLINE
+
+
+def critique_offline(claim: Claim, evidence: list[EvidenceItem]) -> CriticOutput:
+    stance, _ = decide(claim, evidence)
     weak = _weakest(claim, evidence, stance)
     if weak is None:
         return CriticOutput(counter_stance=_FLIP[stance], weakest_evidence=None,
-                            argument="No weak point found in the leading evidence."), llm.OFFLINE
+                            argument="No weak point found in the leading evidence.")
     code, argument = weak
-    return CriticOutput(counter_stance=_FLIP[stance], argument=argument,
-                        weakest_evidence=code), llm.OFFLINE
+    return CriticOutput(counter_stance=_FLIP[stance], argument=argument, weakest_evidence=code)
 
 
 def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:

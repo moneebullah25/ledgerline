@@ -112,10 +112,11 @@ def _critic(state: GraphState, config) -> dict:
 
 def _adjudicator(state: GraphState, config) -> dict:
     with config["configurable"]["tracer"].span("adjudicator") as a:
-        verdict, usage = adjudicator.adjudicate(state["claim"], state["evidence"], state["critic"])
+        verdict, usage, model = adjudicator.adjudicate(state["claim"], state["evidence"],
+                                                       state["critic"])
         _record(a, usage)
         a["label"], a["confidence"] = verdict.label, verdict.confidence
-    return {"verdict": verdict, "model": usage.model, "usages": [("adjudicator", usage)]}
+    return {"verdict": verdict, "model": model, "usages": [("adjudicator", usage)]}
 
 
 @cache

@@ -24,9 +24,14 @@ not the company's. A match supports; a mismatch may be a different definition (M
 subtracts finance-lease principal payments, which no mapped tag carries), so it is
 `insufficient`, never a contradiction.
 
-Loss claims: "net loss of $2.1 billion" is extracted as +2.1e9 while NetIncomeLoss is filed
-as -2.1e9, so a positive value in a loss-phrased claim on a signed metric is compared as
-negative. A loss claim against a filed profit (or the reverse) is then a contradiction.
+Loss claims: extraction stores "net loss of $2.1 billion" as -2.1e9, which compares directly
+with NetIncomeLoss filed as -2.1e9. Older or model-extracted claims may carry +2.1e9, so a
+positive value whose nearest metric phrase is a loss phrase is compared as negative ("net loss
+of $1B versus net income of $2B" signs only the $1B). A loss claim against a filed profit (or
+the reverse) is then a contradiction. A change claim on a loss with a negative base ("net loss
+widened 20%") compares magnitudes: -1.0 to -1.2 widened the loss by 20%.
+
+Basis points: "up 120 basis points" is 1.20 points, printed to a hundredth of a point.
 
 Citations: every filed fact is cited with its own value and unit (a margin cites its USD
 numerator and denominator); values the agent computed (the margin itself, the change, the
@@ -46,7 +51,7 @@ from threading import Lock
 from sqlalchemy.orm import Session
 
 from ledgerline.concepts import CONCEPTS
-from ledgerline.extract.normalize import parse_values
+from ledgerline.extract.normalize import Value, parse_values
 from ledgerline.graph.state import Ctx
 from ledgerline.llm import OFFLINE, Usage
 from ledgerline.models import Claim
@@ -59,9 +64,12 @@ _SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
 _PCT = re.compile(
     r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?%|\s(?:percent|percentage points?|points?|pts)\b)")
+_BPS = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)[\s-]?(?:basis[\s-]points?|bps)\b",
+                  re.IGNORECASE)
 _TOKEN = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.(\d+))?")
 _SIGNED = {"net_income", "operating_income", "eps_diluted", "free_cash_flow"}
-_LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss per\b", re.IGNORECASE)
+_LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss (?:per|from operations)\b",
+                   re.IGNORECASE)
 _INCOME = re.compile(r"\b(?:income|earnings|profit)\b", re.IGNORECASE)
 _FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
 # ponytail: cue words only; "revenue including acquisitions was $5B" also reads as a part.
@@ -75,12 +83,15 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
     """Half a unit in the last digit `text` printed for `value`, in value's own units.
     For a percent claim, numbers followed by %/points are tried first ("$5.0 billion, up
     5%" printed the 5 with no decimals). 0 when no printed number matches the value."""
-    pct = [m.group(1) for m in _PCT.finditer(text)] if unit == "percent" else []
-    for tok in pct + [m.group() for m in _TOKEN.finditer(text)]:
-        x = abs(float(tok.replace(",", "")))
+    toks = [(m.group(), 1.0) for m in _TOKEN.finditer(text)]
+    if unit == "percent":  # a basis point is a hundredth of a point
+        toks = ([(m.group(1), 0.01) for m in _BPS.finditer(text)]
+                + [(m.group(1), 1.0) for m in _PCT.finditer(text)] + toks)
+    for tok, per in toks:
+        x = abs(float(tok.replace(",", ""))) * per
         for scale in _SCALES:
             if x and math.isclose(x * scale, abs(value), rel_tol=1e-6):
-                return 0.5 * 10 ** -len(tok.partition(".")[2]) * scale
+                return 0.5 * 10 ** -len(tok.partition(".")[2]) * per * scale
     if unit == "percent" and value == 0 and _FLAT.search(text):
         return 0.5
     return 0.0
@@ -148,21 +159,33 @@ def _label(f: Fact) -> str:
     return f"{f.concept} {f.fiscal_year} {f.fiscal_period}"
 
 
+def _claimed_spans(claim: Claim) -> list[Value]:
+    """The printed values in the claim text that are the claim's value (or range end)."""
+    claimed = [abs(float(x)) for x in (claim.value, claim.value_high) if x is not None]
+    return [v for v in parse_values(claim.text)
+            if any(x is not None and math.isclose(abs(x), c, rel_tol=1e-6)
+                   for x in (v.value, v.value_high) for c in claimed)]
+
+
 def _loss_claim(claim: Claim) -> bool:
-    # ponytail: a sentence naming both a loss and income ("net income of $5B vs a net loss")
-    # is left unsigned; locating the phrase next to the printed value would resolve it.
-    return (claim.metric in _SIGNED and bool(_LOSS.search(claim.text))
-            and not _INCOME.search(claim.text))
+    """Is the metric phrase nearest the claimed value a loss phrase ("net loss of $2.1B")?
+    Only that phrase counts: "net loss of $1B versus net income of $2B" is a loss claim."""
+    if claim.metric not in _SIGNED:
+        return False
+    spans = _claimed_spans(claim)
+    if not spans:  # value not found in the text: fall back to the whole sentence
+        return bool(_LOSS.search(claim.text)) and not _INCOME.search(claim.text)
+    v = spans[0]
+    phrases = [(v.start - m.end() if m.end() <= v.start else m.start() - v.end, rx is _LOSS)
+               for rx in (_LOSS, _INCOME) for m in rx.finditer(claim.text)
+               if m.end() <= v.start or m.start() >= v.end]
+    return min(phrases)[1] if phrases else False
 
 
 def _is_part(claim: Claim) -> bool:
     """Is the claimed number a component of the metric rather than its total?"""
-    claimed = [abs(float(x)) for x in (claim.value, claim.value_high) if x is not None]
-    return any(
-        (_PART_BEFORE.search(claim.text[:v.start]) or _PART_AFTER.match(claim.text[v.end:]))
-        and any(x is not None and math.isclose(abs(x), c, rel_tol=1e-6)
-                for x in (v.value, v.value_high) for c in claimed)
-        for v in parse_values(claim.text))
+    return any(_PART_BEFORE.search(claim.text[:v.start]) or _PART_AFTER.match(claim.text[v.end:])
+               for v in _claimed_spans(claim))
 
 
 def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
@@ -180,7 +203,8 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
         return _insufficient(f"claim unit {claim.unit} does not match {claim.metric}")
     lo = float(claim.value)
     hi = float(claim.value_high) if claim.value_high is not None else lo
-    if claim.comparison is None and lo > 0 and _loss_claim(claim):
+    loss = _loss_claim(claim)
+    if claim.comparison is None and lo > 0 and loss:
         lo, hi = -hi, -lo
     half_ulp = max(printed_half_ulp(claim.text, lo, claim.unit),
                    printed_half_ulp(claim.text, hi, claim.unit))
@@ -198,16 +222,19 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
         what = f"filed {_label(cur)}"
     else:
         base = facts[1]
+        cur_v, base_v = cur.value, base.value
+        if loss and base_v < 0:  # "net loss widened 20%": the change in the loss's size
+            cur_v, base_v = -cur_v, -base_v
         if claim.unit == "percent" and unit != "percent":
             if base.value == 0:
                 return _insufficient("base-period value is zero; percent change undefined")
-            actual = (cur.value - base.value) / abs(base.value) * 100
+            actual = (cur_v - base_v) / abs(base_v) * 100
             tol = PP_TOL + half_ulp
         elif claim.unit == "percent":  # margin points
             actual = cur.value - base.value
             tol = PP_TOL + half_ulp
         else:  # an absolute change in the concept's unit
-            actual = cur.value - base.value
+            actual = cur_v - base_v
             tol = REL_TOL * (abs(cur.value) + abs(base.value)) + half_ulp
         nearest = min(max(actual, lo), hi)
         err = nearest - actual

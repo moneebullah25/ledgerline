@@ -118,7 +118,7 @@ def test_generated_text_never_uses_banned_words(fakes):
         ]:
             evidence = [ev(agent, stance, cites, **payload)]
             out, _ = critic.critique(CLAIM, evidence)
-            v, _ = adjudicator.adjudicate(CLAIM, evidence, out)
+            v, *_ = adjudicator.adjudicate(CLAIM, evidence, out)
             texts += [out.argument, v.rationale]
     assert not [t for t in texts if adjudicator.BANNED.search(t)]
 
@@ -127,8 +127,8 @@ def test_xbrl_dominates_numeric_and_dissent_lowers_confidence():
     chunk = Citation(kind="chunk", ref_id=3, quote="Net sales were $94.9 billion.")
     alone = [ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]])]
     both = alone + [ev("filing_rag", "contradicts", [chunk], margin=0.9)]
-    v1, _ = adjudicator.adjudicate(CLAIM, alone, None)
-    v2, _ = adjudicator.adjudicate(CLAIM, both, critic.critique(CLAIM, both)[0])
+    v1, *_ = adjudicator.adjudicate(CLAIM, alone, None)
+    v2, *_ = adjudicator.adjudicate(CLAIM, both, critic.critique(CLAIM, both)[0])
     assert v1.label == v2.label == "supported"
     assert v2.confidence < v1.confidence
 
@@ -203,8 +203,8 @@ def V(label="supported", rationale="Supported by filed revenue of 94.93 billion 
 
 def test_online_bad_then_good(online):
     seen = online(V(rationale="Revenue was 97.2 billion.", cites=[FACT]), V())
-    v, u = adjudicator.adjudicate(CLAIM, [XBRL], None)
-    assert v.label == "supported" and u.input_tokens == 200
+    v, u, model = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert v.label == "supported" and u.input_tokens == 200 and model == "claude-opus-5"
     instruction, data = seen[1]
     assert "97.2" not in instruction and "uncited numbers" in instruction
     assert "97.2" in data["rejected_answer_problems"]
@@ -223,23 +223,42 @@ def test_online_fabricated_citation_value_is_replaced_and_caught(online):
     unknown = Citation(kind="xbrl_fact", ref_id=999, value=1.0)
     online(V(rationale="Filed revenue was 97.2 billion USD.", cites=[fake]),
            V(cites=[fake, unknown, fake]))
-    v, _ = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    v, *_ = adjudicator.adjudicate(CLAIM, [XBRL], None)
     assert v.citations == [FACT]  # the evidence's copy; unknown dropped; deduped
 
 
 def test_online_label_must_match_deciding_stance(online):
     seen = online(V(label="contradicted"), V(label="contradicted"))
-    v, u = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    derived = ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]], derived=True)
+    online_critic = CriticOutput(counter_stance="contradicts", argument="Revenue was 97.2 billion.",
+                                 weakest_evidence="x")
+    v, u, model = adjudicator.adjudicate(CLAIM, [derived], online_critic)
     assert len(seen) == 2 and "label mismatch" in seen[1][0]
     assert v.label == "supported" and "94.93 billion" in v.rationale  # offline rule
-    assert u.model == "claude-opus-5"
+    assert "97.2" not in v.rationale and critic.ARGUMENTS["xbrl_table:derived_fact"] in v.rationale
+    assert model is None and u.model == "claude-opus-5" and u.input_tokens == 200  # spend kept
+
+
+def test_online_label_mismatch_with_other_problems_falls_back(online):
+    bad = V(label="contradicted", rationale="Revenue was 97.2 billion.")
+    online(bad, bad)
+    v, u, model = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert v.label == "supported" and model is None and u.input_tokens == 200
+
+
+def test_online_fallback_integrity_error_carries_usage(online, monkeypatch):
+    online(V(label="contradicted"), V(label="contradicted"))
+    monkeypatch.setattr(adjudicator, "audit", lambda text, *a: ["uncited numbers: [1]"])
+    with pytest.raises(adjudicator.IntegrityError) as exc:
+        adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert exc.value.usage.input_tokens == 200
 
 
 def test_online_forecast_only_must_be_unverifiable(online):
     online(V(label="supported", cites=FORECAST[:1], rationale="Consistent with history."),
            V(label="unverifiable", cites=FORECAST[:1], rationale="Consistent with history only."))
     forecast = ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5})
-    v, _ = adjudicator.adjudicate(GUIDANCE, [forecast], None)
+    v, *_ = adjudicator.adjudicate(GUIDANCE, [forecast], None)
     assert v.label == "unverifiable"
 
 

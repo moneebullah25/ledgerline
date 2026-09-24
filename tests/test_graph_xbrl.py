@@ -121,6 +121,43 @@ def test_net_loss_claim_is_compared_with_negative_fact():
     assert assess(op, [F(-301e6, concept="operating_income")]).stance == "supports"
 
 
+def test_signed_negative_loss_claim_compares_directly():
+    loss = C("net loss of $2.1 billion", -2.1e9, metric="net_income")  # current extraction
+    assert assess(loss, [F(-2.1e9, concept="net_income")]).stance == "supports"
+    assert assess(loss, [F(2.1e9, concept="net_income")]).stance == "contradicts"
+    op = C("loss from operations of $300 million", 300e6, metric="operating_income")
+    assert assess(op, [F(-301e6, concept="operating_income")]).stance == "supports"
+
+
+def test_loss_sign_follows_the_phrase_attached_to_the_value():
+    text = "net loss of $1.0 billion, compared with net income of $2.0 billion a year ago"
+    ni = F(-1.0e9, concept="net_income")
+    assert assess(C(text, 1.0e9, metric="net_income"), [ni]).stance == "supports"
+    text = "net income of $2.0 billion, compared with a net loss of $1.0 billion"
+    assert assess(C(text, 2.0e9, metric="net_income"), [F(2.0e9, concept="net_income")]
+                  ).stance == "supports"
+
+
+def test_loss_change_on_negative_base_compares_magnitudes():
+    widened = C("net loss widened 20% year over year", 20.0, unit="percent", metric="net_income",
+                claim_type="comparison", comparison="yoy")
+    base, cur = F(-1.0e9, fy=2024, concept="net_income", ids=(1,)), F(-1.2e9, concept="net_income")
+    assert assess(widened, [cur, base]).stance == "supports"
+    assert assess(widened, [F(-0.8e9, concept="net_income"), base]).stance == "contradicts"
+    by = C("net loss widened by $200 million", 200e6, metric="net_income",
+           claim_type="comparison", comparison="yoy")
+    assert assess(by, [cur, base]).stance == "supports"
+    fell = C("net income declined 20% year over year", -20.0, unit="percent", metric="net_income",
+             claim_type="comparison", comparison="yoy")
+    assert assess(fell, [cur, base]).stance == "supports"  # not a loss phrase: signed change
+
+
+def test_half_ulp_basis_points():
+    assert printed_half_ulp("margin up 120 basis points", 1.2, "percent") == pytest.approx(0.005)
+    assert printed_half_ulp("margin up 120 bps", 1.2, "percent") == pytest.approx(0.005)
+    assert printed_half_ulp("margin up 1.2 points", 1.2, "percent") == pytest.approx(0.05)
+
+
 def test_comparison_periods():
     assert periods(C("x 5%", 5.0, comparison="qoq", target_fiscal_period="Q1")) == [
         (2025, "Q1"), (2024, "Q4")]

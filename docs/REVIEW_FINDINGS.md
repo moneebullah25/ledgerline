@@ -86,11 +86,11 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] G2 `python -m ledgerline.store verify-offsets`: re-slices every stored chunk (and claim span) against current `load_text`; exits non-zero on any mismatch. Run it and record the result. Result 2026-09-23 on main DB: 12052 offsets verified, 0 mismatches.
 
 ## H. Graph (`graph/**`, `schemas.py`) — after the L2 agent finishes
-- [ ] H1 Adjudicator label-mismatch fallback: use the offline critic (or none), attach usage to any IntegrityError, and return usage with model=None so the verdict is not labelled online.
-- [ ] H2 A3 gap: label mismatch plus another problem after the retry also falls back to the offline rule (not raise).
-- [ ] H3 Loss sign: `_LOSS` matches "loss from operations"; the `_INCOME` veto applies only to the mention attached to the value; change claims on a negative base ("net loss widened 20%") compare magnitudes.
-- [ ] H4 `printed_half_ulp` handles basis points ("120 basis points" = 1.20 pp).
-- [ ] H5 `uncited_numbers`: currency prefixes € £ USD, hyphenated scales ("25-billion"), any whitespace before the unit.
+- [x] H1 Adjudicator label-mismatch fallback: use the offline critic (or none), attach usage to any IntegrityError, and return usage with model=None so the verdict is not labelled online.
+- [x] H2 A3 gap: label mismatch plus another problem after the retry also falls back to the offline rule (not raise).
+- [x] H3 Loss sign: `_LOSS` matches "loss from operations"; the `_INCOME` veto applies only to the mention attached to the value; change claims on a negative base ("net loss widened 20%") compare magnitudes.
+- [x] H4 `printed_half_ulp` handles basis points ("120 basis points" = 1.20 pp).
+- [x] H5 `uncited_numbers`: currency prefixes € £ USD, hyphenated scales ("25-billion"), any whitespace before the unit.
 
 ## I. Extraction + evals (`extract/**`, `concepts.py` synonyms, `evals/l2.py`, `evals/l4.py`)
 - [x] I1 Segment claims keep their qualifier in the claim text ("Data Center revenue was $89.0 billion"), and overlapping-span duplicates are merged for metric=None claims too.

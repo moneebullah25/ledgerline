@@ -17,7 +17,9 @@ Offline a violation is a bug and raises; online the model gets one retry, then i
 Online, every citation the model returns is replaced by the evidence citation with the same
 (kind, ref_id), so it cannot supply its own values or quotes; unknown ones are dropped. The
 model's label must equal the rule's label (expected_label); if it still disagrees after the
-retry, the offline verdict is returned instead.
+retry (with or without other problems), the offline verdict is returned instead, built with the
+offline critic, and reported with model None so it is not labelled online (the spent tokens
+are still returned, priced).
 """
 
 import json
@@ -116,10 +118,11 @@ def _describe(claim: Claim, e: EvidenceItem) -> str:
 
 def adjudicate(
     claim: Claim, evidence: list[EvidenceItem], critic: CriticOutput | None,
-) -> tuple[VerdictDraft, llm.Usage]:
+) -> tuple[VerdictDraft, llm.Usage, str | None]:
+    """(verdict, spend, model that wrote the verdict; None for the offline rule)."""
     if llm.available():
         return _adjudicate_llm(claim, evidence, critic)
-    return _adjudicate_offline(claim, evidence, critic), llm.OFFLINE
+    return _adjudicate_offline(claim, evidence, critic), llm.OFFLINE, None
 
 
 def _adjudicate_offline(
@@ -155,7 +158,7 @@ def _adjudicate_offline(
                         rationale=rationale, citations=cites)
 
 
-def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage]:
+def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, str | None]:
     system, _ = load_prompt("adjudicator")
     data = {"claim": claim.text,
             "evidence": json.dumps([e.model_dump() for e in evidence]),
@@ -176,15 +179,23 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage]:
         if v.label != want:
             problems.append(f"label mismatch: {v.label} but the deciding evidence gives {want}")
         if not problems:
-            return v.model_copy(update={"citations": cites}), total
+            return v.model_copy(update={"citations": cites}), total, total.model
         # A6: problem details quote model output, so they go in a data block, not the instruction.
         kinds = sorted({p.split(":")[0] for p in problems})
         data = data | {"rejected_answer_problems": json.dumps(problems)}
         instruction = (f"Adjudicate the claim. Your previous answer was rejected for "
                        f"{len(problems)} problem(s) of kind {', '.join(kinds)}; the "
                        "rejected_answer_problems document lists them.")
-    if all(p.startswith("label mismatch") for p in problems):
-        return _adjudicate_offline(claim, evidence, critic), total
+    if any(p.startswith("label mismatch") for p in problems):
+        # A3: the rule's label wins. The online critic's argument is unaudited against the
+        # offline rationale's citations, so the offline critic replaces it.
+        from ledgerline.graph.critic import critique_offline  # critic imports this module
+        try:
+            v = _adjudicate_offline(claim, evidence, critique_offline(claim, evidence))
+        except IntegrityError as e:
+            e.usage = total
+            raise
+        return v, total, None
     raise IntegrityError(f"adjudicator output failed audit twice: {problems}", total)
 
 
