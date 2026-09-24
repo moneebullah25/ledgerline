@@ -41,3 +41,21 @@ def test_cli_error_raises(fake_claude):
     fake_claude({"is_error": True, "subtype": "error_max_turns"})
     with pytest.raises(ValueError, match="error_max_turns"):
         llm.structured("fast", "sys", {}, "Go.", CriticOutput)
+
+
+def test_cli_rate_limit_is_retried_then_raises(fake_claude, monkeypatch, tmp_path):
+    monkeypatch.setattr(llm, "RETRY_WAITS_S", (0,))
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    ok = {"is_error": False, "structured_output": {"counter_stance": "insufficient",
+          "argument": "x"}, "usage": {}}
+    limited = {"is_error": True, "result": "API Error: 429 rate limit"}
+    d = fake_claude(limited)
+    # First call rate-limited, second succeeds: swap the script's output after one run.
+    bin_ = d / "claude"
+    bin_.write_text(f"#!/bin/sh\ncat > /dev/null\nif [ -f {d}/n ]; then echo '{json.dumps(ok)}'; "
+                    f"else touch {d}/n; echo '{json.dumps(limited)}'; fi\n")
+    out, _ = llm.structured("fast", "sys", {}, "Go.", CriticOutput)
+    assert out.argument == "x"
+    fake_claude(limited)  # always limited
+    with pytest.raises(llm.RateLimited):
+        llm.structured("fast", "sys", {}, "Go.", CriticOutput)

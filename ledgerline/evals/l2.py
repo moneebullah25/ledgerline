@@ -140,7 +140,7 @@ def _predict_one(s: Session, r: dict, agents: dict | None = None) -> dict:
         res = build.verify_claim(s, to_claim(s, r), Tracer(), agents)
         return {"label": res.verdict.label, "refused": res.refused,
                 "evidence": {e.agent: e for e in res.evidence}}
-    except (SQLAlchemyError, ImportError):
+    except (SQLAlchemyError, ImportError, llm.RateLimited):
         raise
     except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
         return {"label": "unverifiable", "refused": True, "evidence": {},

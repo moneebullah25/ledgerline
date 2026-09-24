@@ -16,6 +16,7 @@ import re
 import secrets
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -116,6 +117,16 @@ def structured[T: BaseModel](
 
 
 CLI_TIMEOUT_S = 300
+# Rate limits and overload are transient: retried with backoff. A limit that outlasts the
+# retries raises RateLimited, which callers treat as an infrastructure failure (the report
+# fails and can be re-queued) rather than scoring the claim as unverifiable.
+RETRY_WAITS_S = (15, 60, 180, 600)
+_TRANSIENT = ("rate limit", "rate_limit", "429", "overloaded", "529", "usage limit",
+              "session limit")
+
+
+class RateLimited(RuntimeError):
+    pass
 
 
 def _structured_cli[T: BaseModel](
@@ -124,20 +135,28 @@ def _structured_cli[T: BaseModel](
     """The same call through `claude -p`: our system prompt replaces the CLI's, every tool
     is disabled and the process runs in an empty directory, because the prompt carries
     untrusted filing text. The prompt goes on stdin, never argv (it would show in ps)."""
-    with tempfile.TemporaryDirectory(prefix="ledgerline-cli-") as cwd:
-        proc = subprocess.run(
-            [settings().claude_bin, "-p", "--model", model, "--system-prompt", system,
-             "--strict-mcp-config", "--tools", "", "--output-format", "json",
-             "--json-schema", json.dumps(schema.model_json_schema())],
-            input=prompt, capture_output=True, text=True, cwd=cwd, timeout=CLI_TIMEOUT_S,
-            check=False,  # a non-zero exit still prints the JSON error we report below
-        )
-    try:
-        out = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        raise ValueError(f"claude CLI exit {proc.returncode}: {proc.stderr[-300:]}") from None
+    for wait in (*RETRY_WAITS_S, None):
+        with tempfile.TemporaryDirectory(prefix="ledgerline-cli-") as cwd:
+            proc = subprocess.run(
+                [settings().claude_bin, "-p", "--model", model, "--system-prompt", system,
+                 "--strict-mcp-config", "--tools", "", "--output-format", "json",
+                 "--json-schema", json.dumps(schema.model_json_schema())],
+                input=prompt, capture_output=True, text=True, cwd=cwd, timeout=CLI_TIMEOUT_S,
+                check=False,  # a non-zero exit still prints the JSON error we report below
+            )
+        try:
+            out = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            out = {"is_error": True, "result": proc.stderr[-300:] or proc.stdout[-300:]}
+        text = f"{out.get('result', '')} {out.get('subtype', '')} {proc.stderr[-300:]}".lower()
+        if not (out.get("is_error") and any(t in text for t in _TRANSIENT)):
+            break
+        if wait is None:
+            raise RateLimited(f"{model}: still rate-limited after {len(RETRY_WAITS_S)} retries")
+        time.sleep(wait)
     if out.get("is_error") or out.get("structured_output") is None:
-        raise ValueError(f"{model} returned no valid {schema.__name__} ({out.get('subtype')})")
+        raise ValueError(f"{model} returned no valid {schema.__name__} "
+                         f"({out.get('subtype') or out.get('result', '')[:200]})")
     u = out.get("usage", {})
     return schema.model_validate(out["structured_output"]), Usage(
         model=model,

@@ -196,7 +196,7 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
             tracer = Tracer()
             try:
                 result = verify_claim(s, claim, tracer)
-            except (SQLAlchemyError, ImportError):
+            except (SQLAlchemyError, ImportError, llm.RateLimited):  # infra: fail, re-queue
                 raise
             except Exception as e:
                 log.exception("report %s claim %s: no verdict", report_id, claim.id)
