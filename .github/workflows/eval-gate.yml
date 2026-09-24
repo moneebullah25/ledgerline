@@ -32,16 +32,18 @@ jobs:
         with: {enable-cache: true}
       - run: uv sync --frozen --extra ml
       - run: uv run alembic upgrade head
+      # The frozen golden fixture: exactly the rows L2 reads (filings, facts, chunks, claims).
+      - run: uv run python -m ledgerline.evals.golden load-fixture
       # Compare against the baseline on the base branch, so a PR cannot lower its own bar.
       # base_ref goes through env, never interpolated into the script (injection).
       - run: git show "origin/${BASE_REF}:ledgerline/evals/baseline.json" > "$RUNNER_TEMP/baseline.json"
         env:
           BASE_REF: ${{ github.base_ref }}
-      # The model key is visible to this step only, not to dependency installs or migrations.
+      # Offline on purpose: the baseline was recorded with the deterministic offline graph, and
+      # comparing an online run against it would mix two systems. Record an online baseline on
+      # main before giving this step ANTHROPIC_API_KEY.
       - id: gate
         run: uv run python -m ledgerline.evals.gate --baseline "$RUNNER_TEMP/baseline.json" --out eval-gate.md
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: Post per-claim verdict diff
         if: always() && hashFiles('eval-gate.md') != ''
         env:
