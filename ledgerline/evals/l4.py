@@ -3,7 +3,7 @@
     python -m ledgerline.evals.l4 [--no-write]
 
 Population: every extracted guidance claim with a canonical metric and a value, at the
-current EXTRACTOR_VERSION only (older versions' rows stay in the table). Not the golden set,
+current extractor_version() only (older versions' rows stay in the table). Not the golden set,
 which holds only 25 guidance claims.
 At claim time: the forecast agent runs exactly as in verify_claim; it only sees quarterly
 XBRL history up to the release quarter. `flagged` = stance `contradicts` (the guided value
@@ -30,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ledgerline.concepts import CONCEPTS
-from ledgerline.extract.pipeline import EXTRACTOR_VERSION
+from ledgerline.extract.pipeline import extractor_version
 from ledgerline.graph.agents import forecast, xbrl_table
 from ledgerline.graph.build import context
 from ledgerline.models import Claim, Company, EvalRun
@@ -64,7 +64,7 @@ def backtest(s: Session) -> list[dict]:
     claims = s.execute(
         select(Claim, Company.ticker).join(Company, Company.id == Claim.company_id)
         .where(Claim.claim_type == "guidance", Claim.value.is_not(None),
-               Claim.metric.in_(list(CONCEPTS)), Claim.extractor_version == EXTRACTOR_VERSION)
+               Claim.metric.in_(list(CONCEPTS)), Claim.extractor_version == extractor_version())
         .order_by(Claim.id)
     ).all()
     rows = []

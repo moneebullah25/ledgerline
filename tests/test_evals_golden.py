@@ -36,6 +36,33 @@ def test_frozen_golden_set_is_valid_and_documented():
             assert r["adjudication"]
 
 
+def test_frozen_heldout_set_is_blind_new_and_stratified():
+    held, gold = golden.load(golden.HELDOUT), golden.load()
+    assert len(held) >= 100 and all(r["id"].startswith("h") for r in held)
+    assert all(r["annotator"] and r["evidence"] for r in held)
+    assert {r["extractor_version"] for r in held} == {golden.HELDOUT_EXTRACTOR}
+    spans = {(g["accession_no"], tuple(g["span"])) for g in gold}
+    for r in held:  # no filing span shared with (or overlapping) a golden record
+        assert not any(acc == r["accession_no"] and golden._overlaps(tuple(r["span"]), sp)
+                       for acc, sp in spans)
+    types = Counter(r["claim"]["claim_type"] for r in held)
+    assert set(types) == {"reported_result", "comparison", "guidance", "qualitative"}
+    assert len({r["ticker"] for r in held}) == 15
+    # Guidance with a known outcome is labelled against it (not left unverifiable).
+    assert any(r["claim"]["claim_type"] == "guidance" and r["gold"] != "unverifiable"
+               for r in held)
+
+
+def test_heldout_candidates_drop_golden_spans_and_judged_claims():
+    g = [{"accession_no": "a", "span": [10, 20]}]
+    claims = [{"source_claim_id": 1, "accession_no": "a", "span": [15, 30]},   # overlaps
+              {"source_claim_id": 2, "accession_no": "a", "span": [20, 30]},   # adjacent: kept
+              {"source_claim_id": 3, "accession_no": "b", "span": [10, 20]},   # other filing
+              {"source_claim_id": 4, "accession_no": "b", "span": [40, 50]}]   # has a verdict
+    kept = golden.heldout_candidates(claims, g, judged={4})
+    assert [c["source_claim_id"] for c in kept] == [2, 3]
+
+
 def test_perturbations_come_from_supported_golden_claims():
     base = {r["id"]: r for r in golden.load()}
     for p in golden.load(golden.PERTURBED):

@@ -1,6 +1,18 @@
 # §12: a PR touching anything L2 depends on (ingest, retrieval, extraction, the verification
 # graph, schemas/concepts/llm, the eval harness) is blocked if L2 contradiction precision
 # drops more than 2 points (absolute) below main's baseline.
+#
+# Scope: this gate covers the OFFLINE system only (deterministic rule adjudicator, no LLM
+# credentials in CI) on the frozen golden set. It says nothing about the online (LLM) graph,
+# and it does not score the held-out set (`l2 --set heldout`), which is run by hand.
+# To gate the online system, record an online baseline on main first, then give the job
+# credentials, never the other way round (an online run compared with an offline baseline
+# mixes two systems):
+#   1. on main, with ANTHROPIC_API_KEY set and the golden fixture loaded:
+#        uv run python -m ledgerline.evals.gate --baseline ledgerline/evals/baseline.json --write-baseline
+#   2. commit that baseline.json to main;
+#   3. add ANTHROPIC_API_KEY to the gate step's env below. An online run costs one LLM pass
+#      per golden claim per PR.
 name: eval-gate
 on:
   pull_request:

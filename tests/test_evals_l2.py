@@ -104,7 +104,8 @@ def test_remap_current_prefers_same_type_then_overlap(db):
     db.add(f)
     db.flush()
 
-    def add(a, b, claim_type, comparison=None, version=l2.EXTRACTOR_VERSION):
+    def add(a, b, claim_type, comparison=None, version=None):
+        version = version or l2.extractor_version()
         c = Claim(company_id=co.id, filing_id=f.id, fiscal_year=2025, fiscal_period="Q3",
                   span_start=a, span_end=b, text="t" * (b - a), claim_type=claim_type,
                   comparison=comparison, metric="revenue", value=5.0, unit="percent",
@@ -129,5 +130,55 @@ def test_remap_current_prefers_same_type_then_overlap(db):
     assert unmatched == ["g3"]
     assert [(r["id"], r["source_claim_id"], r["span"]) for r in out] == [
         ("g1", change.id, [10, 45]), ("g2", level.id, [10, 30])]
-    assert out[0]["gold"] == "supported" and out[0]["extractor_version"] == l2.EXTRACTOR_VERSION
+    assert out[0]["gold"] == "supported" and out[0]["extractor_version"] == l2.extractor_version()
     assert out[0]["claim"]["value"] == 5.0  # a JSON float, as to_claim expects
+
+
+def test_clopper_pearson_matches_exact_reference_values():
+    # Reference values: beta quantiles (scipy.stats.beta.ppf) for the same k, n.
+    assert l2.clopper_pearson(5, 10) == pytest.approx([0.187086, 0.812914], abs=1e-6)
+    assert l2.clopper_pearson(0, 10) == pytest.approx([0.0, 0.308497], abs=1e-6)
+    assert l2.clopper_pearson(10, 10) == pytest.approx([0.691503, 1.0], abs=1e-6)
+    assert l2.clopper_pearson(3, 23) == pytest.approx([0.027752, 0.335889], abs=1e-6)
+    assert l2.clopper_pearson(0, 0) is None
+
+
+def test_summarize_reports_intervals_on_the_real_set():
+    real = [{"id": "g1", "gold": "contradicted"}, {"id": "g2", "gold": "supported"},
+            {"id": "g3", "gold": "contradicted"}]
+    pred = {"g1": {"label": "contradicted"}, "g2": {"label": "contradicted"},
+            "g3": {"label": "supported"}}
+    m, _ = l2.summarize(real, [], pred)
+    assert m["contradiction_precision_ci"] == l2.clopper_pearson(1, 2)
+    assert m["contradiction_recall_ci"] == l2.clopper_pearson(1, 2)
+    assert m["accuracy_ci"] == l2.clopper_pearson(1, 3)
+    lo, hi = m["accuracy_ci"]
+    assert lo < m["accuracy"] < hi
+    none, _ = l2.summarize([{"id": "g1", "gold": "supported"}], [], {"g1": {"label": "supported"}})
+    assert none["contradiction_precision_ci"] is None and none["contradiction_recall_ci"] is None
+
+
+def test_workers_are_validated_and_capped_below_the_pool():
+    assert l2.cap_workers(8, pool_size=5) == 4   # the run's own Session holds one connection
+    assert l2.cap_workers(2, pool_size=5) == 2
+    assert l2.cap_workers(3, pool_size=1) == 1
+    with pytest.raises(ValueError):
+        l2.cap_workers(0, pool_size=5)
+    with pytest.raises(SystemExit):
+        l2.main(["--workers", "0", "--no-write"])
+
+
+def test_heldout_set_scores_its_own_records_without_perturbations(monkeypatch):
+    held = [{"id": "h001", "gold": "contradicted"}]
+    loaded = []
+
+    def fake_load(path):
+        loaded.append(path)
+        return held
+    monkeypatch.setattr(l2, "load", fake_load)
+    monkeypatch.setattr(l2, "predict", lambda s, recs, override=None, workers=1: {
+        r["id"]: {"label": "contradicted", "evidence": {}} for r in recs})
+    out = l2.run(set_name="heldout", ablate=False)
+    assert loaded == [l2.HELDOUT]
+    assert out["per_claim"] == {"h001": {"gold": "contradicted", "predicted": "contradicted"}}
+    assert out["metrics"]["n_real"] == 1 and out["metrics"]["n_perturbed"] == 0

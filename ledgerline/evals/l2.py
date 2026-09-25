@@ -1,6 +1,6 @@
 """L2 claim-level eval (PRD §11): verify_claim on the frozen golden set.
 
-    python -m ledgerline.evals.l2 [--no-write]
+    python -m ledgerline.evals.l2 [--no-write] [--set golden|heldout]
 
 Every golden claim (golden.jsonl, real claims, labeled blind to system output) and every
 perturbation (golden_perturbed.jsonl, real supported claims with an injected wrong value)
@@ -12,6 +12,14 @@ compares) is `contradiction_precision` on the real set. Real contradictions are 
 perturbation set is reported separately (`perturbed_*`): it measures whether a wrong number
 is caught, and `combined_contradiction_precision` shows precision when such errors exist.
 The combined figure depends on the arbitrary real:perturbed mix, so it is never the headline.
+Contradiction precision, contradiction recall and accuracy also carry exact (Clopper-Pearson)
+95% intervals (`*_ci`, [low, high]; null when the denominator is 0): on ~10-25 real
+contradictions a point estimate alone overstates what the set can show.
+
+`--set heldout` (eval_run name "l2_heldout") scores data/heldout.jsonl instead: 110 current
+(s4-llm-1) claims drawn with a new seed, sharing no filing span with golden.jsonl, and labelled
+before the system ran on them. golden.jsonl was used while the graph was being tuned, so the
+held-out set is the unbiased estimate. It has no perturbation set.
 
 Ablations (same claims, the full run's evidence replayed for every agent the ablation does
 not touch, so only the ablated part changes):
@@ -24,7 +32,8 @@ A claim whose verification raises is scored as a refused `unverifiable` (what th
 stores, F5) and counted in `errors`; database errors and ImportError propagate.
 
 `--current` (eval_run name "l2_current") re-points every golden record at the claim the
-current extractor (EXTRACTOR_VERSION) produced for the same filing and an overlapping span
+current extractor (extract.pipeline.extractor_version()) produced for the same filing and an
+overlapping span
 (preferring the same claim type and comparison, then the highest span IoU, then the newest
 claim), keeping the frozen gold label.
 It measures the graph on today's extraction; records with no overlapping claim are listed as
@@ -35,7 +44,9 @@ re-mapped span that covers different words is still scored against it.
 
 import argparse
 import json
+import math
 import subprocess
+import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -50,13 +61,14 @@ from ledgerline.evals.golden import (
     ANNOTATOR,
     FIELDS,
     GOLDEN,
+    HELDOUT,
     LABELS,
     PERTURBED,
     jsonable,
     load,
     to_claim,
 )
-from ledgerline.extract.pipeline import EXTRACTOR_VERSION
+from ledgerline.extract.pipeline import extractor_version
 from ledgerline.graph import build, critic
 from ledgerline.graph.adjudicator import decide
 from ledgerline.graph.agents import filing_rag
@@ -64,6 +76,29 @@ from ledgerline.models import Claim, Filing
 from ledgerline.schemas import CriticOutput, EvidenceItem
 from ledgerline.store.retrieval import search
 from ledgerline.tracing import Tracer
+
+SETS = {"golden": GOLDEN, "heldout": HELDOUT}
+
+
+def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> list[float] | None:
+    """Exact two-sided (1 - alpha) binomial interval for k successes in n trials; None if n == 0.
+    Bisection on the binomial tails (stdlib only; n is at most a few hundred here)."""
+    if n == 0:
+        return None
+
+    def below(m: int, p: float) -> float:  # P(X < m) for X ~ Binomial(n, p)
+        return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(m))
+
+    def root(f) -> float:  # f increasing on [0, 1] with one sign change
+        lo, hi = 0.0, 1.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if f(mid) < 0 else (lo, mid)
+        return (lo + hi) / 2
+    # low: P(X >= k) = alpha/2; high: P(X <= k) = alpha/2 (both monotone in p)
+    low = 0.0 if k == 0 else root(lambda p: (1 - below(k, p)) - alpha / 2)
+    high = 1.0 if k == n else root(lambda p: alpha / 2 - below(k + 1, p))
+    return [low, high]
 
 
 def prf(pairs: list[tuple[str, str]]) -> dict:
@@ -123,7 +158,7 @@ def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
     for r in recs:
         (a, b), old = r["span"], r["claim"]
         cands = s.scalars(select(Claim).join(Filing, Filing.id == Claim.filing_id).where(
-            Filing.accession_no == r["accession_no"], Claim.extractor_version == EXTRACTOR_VERSION,
+            Filing.accession_no == r["accession_no"], Claim.extractor_version == extractor_version(),
             Claim.span_start < b, Claim.span_end > a)).all()
         if not cands:
             unmatched.append(r["id"])
@@ -197,10 +232,15 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
     real = [(r["gold"], pred[r["id"]]["label"]) for r in recs]
     per = [(r["gold"], pred[r["id"]]["label"]) for r in pert]
     m, mp, mc = prf(real), prf(per), prf(real + per)
+    c = m["contradicted"]
     return {
-        "contradiction_precision": m["contradicted"]["precision"],
-        "contradiction_recall": m["contradicted"]["recall"],
-        "accuracy": m["accuracy"], "macro_f1": m["macro_f1"],
+        "contradiction_precision": c["precision"],
+        "contradiction_precision_ci": clopper_pearson(c["tp"], c["predicted"]),
+        "contradiction_recall": c["recall"],
+        "contradiction_recall_ci": clopper_pearson(c["tp"], c["gold"]),
+        "accuracy": m["accuracy"],
+        "accuracy_ci": clopper_pearson(sum(g == p for g, p in real), len(real)),
+        "macro_f1": m["macro_f1"],
         **{f"{lab}_{k}": m[lab][k] for lab in ("supported", "unverifiable")
            for k in ("precision", "recall", "f1")},
         "perturbed_contradiction_recall": mp["contradicted"]["recall"],
@@ -210,13 +250,28 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
     }, {"real": m, "perturbed": mp, "combined": mc}
 
 
+def cap_workers(workers: int, pool_size: int) -> int:
+    """Parallel claims, each holding a pooled connection while the run's own Session holds
+    one more: stay below the pool so no worker waits on (or times out for) a connection."""
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+    capped = min(workers, max(1, pool_size - 1))
+    if capped < workers:
+        print(f"l2: workers capped at {capped} (DB pool size {pool_size})", file=sys.stderr)
+    return capped
+
+
 def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bool = True,
-        evidence_out: str | None = None) -> dict:
+        evidence_out: str | None = None, set_name: str = "golden") -> dict:
     """The §12 gate contract: {"metrics": {...}, "per_claim": {id: {"gold", "predicted"}}}.
-    current=True scores the golden labels against today's claims (see module docstring)."""
+    current=True scores the gold labels against today's claims (see module docstring);
+    set_name picks the labelled set (SETS). Perturbations exist for the golden set only."""
     from ledgerline.db import engine
 
-    recs, pert = load(GOLDEN), (load(PERTURBED) if PERTURBED.exists() and not current else [])
+    workers = cap_workers(workers, engine().pool.size())
+    recs = load(SETS[set_name])
+    pert = (load(PERTURBED) if set_name == "golden" and PERTURBED.exists() and not current
+            else [])
     unmatched: list[str] = []
     # A plain Session that is never committed: the eval must not write claim/verdict rows.
     with Session(engine()) as s:
@@ -247,9 +302,12 @@ def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bo
         sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
                              check=False).stdout.strip() or None
         with session() as w:
-            w.add(EvalRun(git_sha=sha, layer="L2", name="l2_current" if current else "L2",
-                          metrics=metrics, details={
-                "llm_available": llm.available(), "annotator": ANNOTATOR,
+            run_name = "l2_current" if current else "L2"
+            if set_name != "golden":
+                run_name = f"l2_{set_name}" + ("_current" if current else "")
+            w.add(EvalRun(git_sha=sha, layer="L2", name=run_name, metrics=metrics, details={
+                "llm_available": llm.available(), "set": set_name,
+                "annotator": ANNOTATOR if set_name == "golden" else recs[0]["annotator"],
                 **({"unmatched": unmatched, "claim_ids": {
                     r["id"]: r["source_claim_id"] for r in recs}} if current else {}),
                 "detail": detail, "ablations": ab_metrics, "per_claim": {
@@ -260,18 +318,30 @@ def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bo
     return result
 
 
+def positive_int(v: str) -> int:
+    """argparse type for worker counts: ThreadPoolExecutor rejects 0 only once it is too late."""
+    n = int(v)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.l2")
     p.add_argument("--no-write", action="store_true", help="skip the eval_run row")
     p.add_argument("--current", action="store_true",
                    help="score gold labels against the current extractor's claims")
-    p.add_argument("--workers", type=int, default=1, help="parallel claims (online path)")
+    p.add_argument("--set", dest="set_name", choices=sorted(SETS), default="golden",
+                   help="labelled claim set (heldout: blind-labelled, never used for tuning)")
+    p.add_argument("--workers", type=positive_int, default=1,
+                   help="parallel claims (online path); capped below the DB pool size")
     p.add_argument("--no-ablations", action="store_true",
                    help="skip the ablation re-runs (each is a full online pass)")
     p.add_argument("--evidence-out", help="save per-claim evidence for `l3 --evidence`")
     a = p.parse_args(argv)
     print(json.dumps(run(write=not a.no_write, current=a.current, workers=a.workers,
-                         ablate=not a.no_ablations, evidence_out=a.evidence_out)["metrics"],
+                         ablate=not a.no_ablations, evidence_out=a.evidence_out,
+                         set_name=a.set_name)["metrics"],
                      indent=2))
 
 
