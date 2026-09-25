@@ -41,7 +41,14 @@ Guidance whose target period has been reported is checked the same way: supports
 the reported value landed inside the guided value/range.
 
 payload["deviation"] feeds severity: for levels, (nearest claimed value - actual) / |actual|;
-for changes, (claimed - actual) in points / 100. payload["tol_used"] = |error| / tolerance.
+for changes, (claimed - actual) in points / 100. It is None when the filed value is 0 (no
+relative error exists; the absolute amount must not pass for one). payload["tol_used"] =
+|error| / tolerance.
+
+Implausible gaps: a dollar or per-share result more than IMPLAUSIBLE_GAP from the same-sign
+filed fact is `insufficient` with payload["implausible_gap"], citing the facts and the gap in
+percent so the refusal can say so. Percent concepts are exempt: a margin 13 points off is a
+contradiction to rule on, not a misread scale.
 """
 
 import math
@@ -62,8 +69,9 @@ REL_TOL = 0.005
 # A reported figure more than this far (relative) from the filed one is almost always a
 # misread period or scope (a quarter read as the year, dividends read as cash flow), not a
 # misstatement: the agent abstains instead of contradicting. Perturbed test claims move
-# 15-25%, well inside it.
+# 15-25%, well inside it. Dollar and per-share concepts only (see module docstring).
 IMPLAUSIBLE_GAP = 0.5
+_GAP_UNITS = ("USD", "USD/share")
 PP_TOL = 0.1
 _SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
@@ -223,7 +231,7 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
         tol = (PP_TOL if unit == "percent" else REL_TOL * abs(actual)) + half_ulp
         nearest = min(max(actual, lo), hi)
         err = nearest - actual
-        deviation = err / abs(actual) if actual else err
+        deviation = err / abs(actual) if actual else None
         what = f"filed {_label(cur)}"
     else:
         base = facts[1]
@@ -243,7 +251,7 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
             tol = REL_TOL * (abs(cur.value) + abs(base.value)) + half_ulp
         nearest = min(max(actual, lo), hi)
         err = nearest - actual
-        deviation = err / 100 if claim.unit == "percent" else (err / abs(actual) if actual else err)
+        deviation = err / 100 if claim.unit == "percent" else (err / abs(actual) if actual else None)
         what = f"{claim.comparison} change from filed {_label(base)} to {_label(cur)}"
         ref += f":{claim.comparison}_change"
         cites.append(Citation(kind="computed", ref_id=ref, value=actual, unit=claim.unit))
@@ -253,10 +261,17 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     # Same sign only: a loss claimed against a filed profit (or the reverse) is a real
     # contradiction, not a misread scale.
     if (not ok and claim.claim_type == "reported_result" and claim.comparison is None
-            and abs(deviation) > IMPLAUSIBLE_GAP and lo * actual > 0):
-        return _insufficient(f"claimed value is {abs(deviation):.0%} from the {what}: more "
-                             "likely a period or scope misreading than a misstatement",
-                             actual=actual, deviation=deviation)
+            and unit in _GAP_UNITS and lo * actual > 0 and abs(deviation) > IMPLAUSIBLE_GAP):
+        gap = abs(deviation) * 100
+        return EvidenceItem(
+            agent="xbrl_table", stance="insufficient",
+            summary=(f"claimed value is {gap:.0f}% from the {what}: more likely a period or "
+                     "scope misreading than a misstatement"),
+            citations=[*cites[:-1],  # the facts, minus the tolerance
+                       Citation(kind="computed", ref_id=f"{ref}:gap_pct", value=gap,
+                                unit="percent")],
+            payload={"implausible_gap": True, "gap_pct": gap, "actual": actual,
+                     "deviation": deviation})
     if not ok and claim.metric in _COMPANY_DEFINED:
         return _insufficient(f"{claim.metric} is company-defined; the derived definition does "
                              "not match and no filed fact carries the company's", actual=actual)

@@ -92,14 +92,22 @@ def _refusal_check(state: GraphState, config) -> dict:
         a["refused"] = refused
         if not refused:
             return {"refused": False}
-        checked = ", ".join(e.agent for e in truth) or "none"
-        rationale = ("Unverifiable. No truth-bearing agent found evidence that supports or "
-                     f"contradicts the claim (checked: {checked}).")
-        if problems := adjudicator.audit(rationale, [], state["claim"].text):
+        gap = next((e for e in truth if e.payload.get("implausible_gap")), None)
+        if gap is not None:  # L2: say why the filed fact was not ruled on, citing it and the gap
+            cites = gap.citations
+            rationale = (f"Unverifiable. The filed fact differs from the claimed value by "
+                         f"{gap.payload['gap_pct']:.0f}%, likely a period or scope misreading "
+                         "rather than a misstatement, so it is not ruled on.")
+        else:
+            cites = []
+            checked = ", ".join(e.agent for e in truth) or "none"
+            rationale = ("Unverifiable. No truth-bearing agent found evidence that supports or "
+                         f"contradicts the claim (checked: {checked}).")
+        if problems := adjudicator.audit(rationale, cites, state["claim"].text):
             raise adjudicator.IntegrityError(f"refusal rationale failed audit: {problems}")
         # Confidence 1.0: the refusal is a mechanical fact about the evidence, not a judgment.
         verdict = VerdictDraft(label="unverifiable", confidence=1.0, rationale=rationale,
-                               citations=[])
+                               citations=cites)
         return {"refused": True, "verdict": verdict, "critic": None, "model": None}
 
 

@@ -228,3 +228,39 @@ def test_implausible_gap_abstains_but_a_real_misstatement_contradicts():
     assert far.stance == "insufficient" and "misreading" in far.summary
     near = C("revenue of $110.0 billion", 110.0e9, claim_type="reported_result")
     assert assess(near, [F(94_930e6)]).stance == "contradicts"  # 16% off: a claim to rule on
+
+
+def _eps(text, value, **kw):
+    return assess(C(text, value, unit="USD/share", metric="eps_diluted", **kw),
+                  [F(10.00, concept="eps_diluted", unit="USD/share")])
+
+
+@pytest.mark.parametrize("text,value,kw,stance", [
+    ("Diluted EPS was $5.10", 5.10, {}, "contradicts"),  # 49% under: a claim to rule on
+    ("Diluted EPS was $4.90", 4.90, {}, "insufficient"),  # 51% under
+    ("Diluted EPS was $14.90", 14.90, {}, "contradicts"),  # 49% over
+    ("Diluted EPS was $15.10", 15.10, {}, "insufficient"),  # 51% over-claim
+    ("Diluted EPS will be $4.90", 4.90, {"claim_type": "guidance"}, "contradicts"),
+    ("Diluted EPS between $4.00 and $5.10", 4.00, {"value_high": 5.10}, "contradicts"),
+    ("Diluted EPS between $3.00 and $4.90", 3.00, {"value_high": 4.90}, "insufficient"),
+])
+def test_implausible_gap_boundaries(text, value, kw, stance):
+    ev = _eps(text, value, **kw)
+    assert ev.stance == stance
+    if stance == "insufficient":  # cites the fact and the gap, not the tolerance
+        assert ev.payload["implausible_gap"] and round(ev.payload["gap_pct"]) == 51
+        assert [c.ref_id for c in ev.citations] == [11, "eps_diluted:2025Q1:gap_pct"]
+
+
+def test_implausible_gap_excludes_comparisons_and_percent_concepts():
+    grew = C("revenue grew 80%", 80.0, unit="percent", comparison="yoy", claim_type="comparison")
+    assert assess(grew, [F(110e9), F(100e9, fy=2024)]).stance == "contradicts"
+    # A margin 13 points off (100% relative) is measured in points: a contradiction.
+    om = C("operating margin of 26%", 26.0, unit="percent", metric="gross_margin")
+    assert assess(om, [margin(13, 100)]).stance == "contradicts"
+
+
+def test_zero_filed_value_has_no_relative_deviation():
+    ev = assess(C("net income of $1.0 billion", 1.0e9, metric="net_income"),
+                [F(0.0, concept="net_income")])
+    assert ev.stance == "contradicts" and ev.payload["deviation"] is None

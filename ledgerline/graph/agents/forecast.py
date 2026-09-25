@@ -39,8 +39,17 @@ CHRONOS_MODEL = "amazon/chronos-bolt-small"
 _Z95_OVER_Z90 = 1.6449 / 1.2816
 
 
-@cache
+_CHRONOS_LOCK = Lock()
+
+
 def _chronos():
+    """Loaded once: agents run on a thread pool and @cache alone lets two threads both load."""
+    with _CHRONOS_LOCK:
+        return _load_chronos()
+
+
+@cache
+def _load_chronos():
     from chronos import BaseChronosPipeline
 
     return BaseChronosPipeline.from_pretrained(CHRONOS_MODEL, device_map="cpu")

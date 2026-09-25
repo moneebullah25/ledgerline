@@ -140,3 +140,90 @@ def test_judge_llm_summary_is_audited(monkeypatch):
     assert "false" not in _judge(monkeypatch, summary="The claim is false.").summary
     ev = _judge(monkeypatch, summary="Services grew 40% to $31 billion.")  # uncited numbers
     assert ev.stance == "supports" and ev.summary == "Judgment on the retrieved passages: supports."
+
+
+NUM_HIT = Hit(1, 9, "MD&A", "Total net sales were $94,930 million. Services revenue was $26.6 billion.",
+              1.0, 0, 70)
+Q1 = {9: ("10-Q", 2025, "Q1")}
+
+
+def _judge_num(monkeypatch, claim=None, periods=Q1, **j):
+    from ledgerline import llm
+    out = filing_rag._Judgment(**({"stance": "contradicts", "passage": 0,
+                                   "quote": "Total net sales were $94,930 million.",
+                                   "summary": "contradicts"} | j))
+    monkeypatch.setattr(llm, "structured", lambda *a, **k: (out, llm.OFFLINE))
+    claim = claim or C(text="net sales of $94.9 billion", value=94.9e9, unit="USD",
+                       metric="revenue")
+    return filing_rag.judge_llm(claim, [NUM_HIT], None, periods)[0]
+
+
+def test_judge_llm_numeric_contradiction_needs_its_period(monkeypatch):
+    assert _judge_num(monkeypatch).stance == "contradicts"
+    assert _judge_num(monkeypatch, periods={9: ("10-Q", 2024, "Q1")}).stance == "insufficient"
+    assert _judge_num(monkeypatch, periods={}).stance == "insufficient"  # period unknown
+
+
+@pytest.mark.parametrize("j", [
+    {"quote": "Services revenue was $26.6 billion."},  # a different number
+    {"passage": -1},
+    {"quote": ""},
+])
+def test_judge_llm_negatives_are_insufficient(monkeypatch, j):
+    assert _judge_num(monkeypatch, **j).stance == "insufficient"
+
+
+def test_scoped_claim_is_not_contradicted_by_a_company_total(monkeypatch):
+    scoped = C(text="revenue was $94.9 billion", value=94.9e9, unit="USD", metric=None)
+    assert _judge_num(monkeypatch, scoped).stance == "insufficient"
+    assert _judge_num(monkeypatch, scoped, passage_is_company_total=False).stance == "contradicts"
+
+
+@pytest.mark.db
+def test_online_run_sends_release_context_and_periods(db, monkeypatch):
+    from datetime import UTC, datetime
+    from pathlib import Path
+    from threading import Lock
+
+    from ledgerline import llm
+    from ledgerline.graph.state import Ctx
+    from ledgerline.models import Company, Filing
+
+    text = (Path(__file__).parent / "fixtures" / "ex991_nvda_q2fy27.txt").read_text()
+    monkeypatch.setattr("ledgerline.ingest.documents.load_text", lambda f: text)
+    filing_rag._release_text.cache_clear()
+    co = Company(cik="0001045810", ticker="NVDA", name="NVIDIA", fiscal_year_end="0131")
+    db.add(co)
+    db.flush()
+
+    def filing(acc, form, path):
+        f = Filing(company_id=co.id, accession_no=acc, form_type=form, filed_at=date(2026, 8, 26),
+                   fiscal_year=2027, fiscal_period="Q2", doc_url="u", storage_path=path,
+                   source_url="u", fetched_at=datetime.now(UTC), sha256="0" * 64, license_note="t")
+        db.add(f)
+        db.flush()
+        return f
+    release, q = filing("r1", "8-K", "objects/test-l6-release.htm"), filing("q1", "10-Q", "objects/q")
+    phrase = "Data Center revenue of $89.0 billion"
+    start = text.index(phrase)
+    claim = Claim(company_id=co.id, fiscal_year=2027, fiscal_period="Q2", filing_id=release.id,
+                  span_start=start, span_end=start + len(phrase), text=phrase,
+                  claim_type="reported_result", value=89e9, unit="USD", extractor_version="t")
+    hit = Hit(1, q.id, "MD&A", "Data Center revenue was $89.0 billion.", 1.0, 0, 30)
+    monkeypatch.setattr(filing_rag, "_search", lambda *a: [hit])
+    monkeypatch.setattr(llm, "available", lambda: True)
+    seen = []
+
+    def structured(tier, system, data, instruction, schema):
+        seen.append(data)
+        return schema(stance="supports", passage=0, quote="Data Center revenue was $89.0 billion.",
+                      summary="supports"), llm.OFFLINE
+    monkeypatch.setattr(llm, "structured", structured)
+    ctx = Ctx(co.id, co.cik, co.ticker, None, None, Lock())
+    ev, _ = filing_rag.run(db, claim, ctx, ctx.db_lock)
+    assert ev.stance == "supports"
+    assert phrase in seen[0]["claim_sentence"] and "passage 0 (10-Q fiscal 2027 Q2)" in seen[0]
+    claim.span_start += 1  # the span no longer matches the text: no context rather than wrong
+    filing_rag.run(db, claim, ctx, ctx.db_lock)
+    assert not any(k.startswith(("claim_sentence", "claim_section")) for k in seen[1])
+    filing_rag._release_text.cache_clear()

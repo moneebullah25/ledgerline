@@ -193,6 +193,7 @@ def online(monkeypatch):
         monkeypatch.setattr(llm, "available", lambda: True)
         # Exercise the judge path; the gating rule has its own test below.
         monkeypatch.setattr(adjudicator, "needs_judgment", lambda claim, evidence: True)
+        monkeypatch.setattr(critic, "needs_judgment", lambda claim, evidence: True)
 
         def structured(tier, system, data, instruction, schema):
             seen.append((instruction, data))
@@ -290,10 +291,61 @@ def test_judge_model_only_when_judgment_is_needed(online, monkeypatch):
     assert not adjudicator.needs_judgment(CLAIM, [XBRL])
 
 
-def test_offline_rationale_drops_a_critic_argument_it_cannot_cite():
-    # A live critic may cite another agent's number (a price move); the rule's rationale
-    # cites only the deciding agent, so it names the point instead of quoting it.
+def test_offline_rationale_never_quotes_an_online_critic():
+    # A live critic may cite another agent's number (a price move); the rule's verdict is
+    # reported with model None, so it quotes only the offline critic.
     loose = CriticOutput(counter_stance="contradicts", argument="Shares moved 8.4% after the release.",
                          weakest_evidence="market_reaction:context")
-    v, _, _ = adjudicator.adjudicate(CLAIM, [XBRL], loose)
-    assert "8.4" not in v.rationale and "market_reaction:context" in v.rationale
+    v, _, model = adjudicator.adjudicate(CLAIM, [XBRL], loose)
+    assert model is None and "8.4" not in v.rationale and "market_reaction" not in v.rationale
+    assert v == adjudicator.adjudicate(CLAIM, [XBRL], None)[0]
+
+
+def test_online_verdict_citing_only_unknown_evidence_is_rejected(online):
+    unknown = Citation(kind="xbrl_fact", ref_id=999, value=94_930e6, unit="USD")
+    seen = online(V(cites=[unknown]), V(cites=[unknown]))
+    v, u, model = adjudicator.adjudicate(CLAIM, [XBRL], None)
+    assert "no citations" in seen[1][0] and model is None and u.input_tokens == 200
+    assert v.citations == [FACT]  # the rule's verdict
+
+
+def test_filing_rag_decision_calls_the_models_with_gating_live(online, monkeypatch):
+    rag = ev("filing_rag", "supports", [Citation(kind="chunk", ref_id=5, quote="Services grew.")],
+             margin=0.5, section="MD&A")
+    seen = online(CriticOutput(counter_stance="contradicts", argument="One passage only."),
+                  V(rationale="Supported by the passage.", cites=rag.citations))
+    monkeypatch.setattr(adjudicator, "needs_judgment", NEEDS_JUDGMENT)
+    monkeypatch.setattr(critic, "needs_judgment", NEEDS_JUDGMENT)
+    qual = Claim(**{**{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
+                    "text": "Services grew", "claim_type": "qualitative", "metric": None,
+                    "value": None, "unit": None})
+    assert adjudicator.needs_judgment(qual, [rag])
+    out, _ = critic.critique(qual, [rag])
+    v, _, model = adjudicator.adjudicate(qual, [rag], out)
+    assert len(seen) == 2 and model == "claude-opus-5" and v.label == "supported"
+
+
+def test_unopposed_filed_fact_spends_nothing_online(fakes, online, monkeypatch):
+    seen = online()
+    monkeypatch.setattr(adjudicator, "needs_judgment", NEEDS_JUDGMENT)
+    monkeypatch.setattr(critic, "needs_judgment", NEEDS_JUDGMENT)
+    fakes(xbrl_table=XBRL, filing_rag=ev("filing_rag", "insufficient"))
+    r = build.verify_claim(None, CLAIM, Tracer())
+    assert seen == [] and r.model is None and r.cost_usd == 0 and r.verdict.label == "supported"
+    assert r.critic == critic.critique_offline(CLAIM, [XBRL])
+
+
+def test_implausible_gap_refusal_says_why(fakes):
+    from ledgerline.graph.agents.xbrl_table import assess
+    from ledgerline.store.xbrl_query import Fact
+
+    eps = Claim(**{**{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
+                   "text": "Diluted EPS was $2.80", "metric": "eps_diluted", "value": 2.80,
+                   "unit": "USD/share"})
+    fact = Fact(11.39, "USD/share", (11,), "eps_diluted", 2025, "FY", None, False, "u", ())
+    fakes(xbrl_table=assess(eps, [fact]), filing_rag=ev("filing_rag", "insufficient"))
+    r = build.verify_claim(None, eps, Tracer())
+    assert r.refused and r.verdict.label == "unverifiable"
+    assert "differs from the claimed value by 75%" in r.verdict.rationale
+    assert "misreading" in r.verdict.rationale and "No truth-bearing" not in r.verdict.rationale
+    assert adjudicator.audit(r.verdict.rationale, r.verdict.citations, eps.text) == []

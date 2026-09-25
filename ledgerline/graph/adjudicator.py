@@ -124,10 +124,17 @@ def adjudicate(
     The judge model is called only when judgment is needed (§14 cost): truth-bearing agents
     disagree, or a filing passage decides. An unopposed filed-fact verdict is arithmetic,
     and the model's label must equal the rule's anyway (A3), so the audited rule writes it.
+    The rule quotes only the offline critic: an online critic's argument is not the rule's to
+    repeat under a verdict reported with model None.
     """
     if llm.available() and needs_judgment(claim, evidence):
         return _adjudicate_llm(claim, evidence, critic)
-    return _adjudicate_offline(claim, evidence, critic), llm.OFFLINE, None
+    return _adjudicate_offline(claim, evidence, _offline_critic(claim, evidence)), llm.OFFLINE, None
+
+
+def _offline_critic(claim: Claim, evidence: list[EvidenceItem]) -> CriticOutput:
+    from ledgerline.graph.critic import critique_offline  # critic imports this module
+    return critique_offline(claim, evidence)
 
 
 def needs_judgment(claim: Claim, evidence: list[EvidenceItem]) -> bool:
@@ -161,11 +168,7 @@ def _adjudicate_offline(
                      f"the {e.agent} evidence takes precedence under the dominance rule.")
     if critic and critic.weakest_evidence:
         conf -= 0.1
-        # The critic's argument was audited against all evidence, this rationale only against
-        # the deciding agent's citations: quote it only if it passes here, else name its point.
-        quoted = not audit(critic.argument, e.citations, claim.text)
-        parts.append(f"Critic: {critic.argument}" if quoted
-                     else f"Critic flagged a weak point ({critic.weakest_evidence}).")
+        parts.append(f"Critic: {critic.argument}")  # offline arguments carry no numbers
     label = expected_label(claim, evidence)
     rationale = f"{label.capitalize()}. " + " ".join(parts)
     cites = list(e.citations)
@@ -207,9 +210,8 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
     # falls back to the rule's verdict, whose templated rationale is audited below. The
     # online critic's argument is unaudited against those citations, so the offline critic
     # replaces it. Only an offline failure (a bug) still raises.
-    from ledgerline.graph.critic import critique_offline  # critic imports this module
     try:
-        v = _adjudicate_offline(claim, evidence, critique_offline(claim, evidence))
+        v = _adjudicate_offline(claim, evidence, _offline_critic(claim, evidence))
     except IntegrityError as e:
         e.usage = total
         raise

@@ -47,6 +47,7 @@ def test_filing_judge_sees_the_claims_release_context(monkeypatch):
                             fiscal_period="Q2", target_fiscal_year=None, target_fiscal_period=None)
     hit = Hit(1, 2, "MD&A", "Data Center revenue was $89.0 billion, up 18%.", 1.0, 0, 10)
     ev, _ = filing_rag.judge_llm(claim, [hit], {"claim_section_heading": "Data Center"},
-                                 {2: "10-Q fiscal 2027 Q2"})
+                                 {2: ("10-Q", 2027, "Q2")})
     assert seen["claim_section_heading"] == "Data Center" and ev.stance == "supports"
     assert seen["claim_period"] == "fiscal 2027 Q2" and "passage 0 (10-Q fiscal 2027 Q2)" in seen
+    assert "claim_scope" in seen  # a value with no metric: extraction judged it not a total

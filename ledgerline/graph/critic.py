@@ -16,6 +16,7 @@ from ledgerline.graph.adjudicator import (
     add_usage,
     audit,
     decide,
+    needs_judgment,
 )
 from ledgerline.models import Claim
 from ledgerline.schemas import CriticOutput, EvidenceItem
@@ -66,8 +67,10 @@ def _weakest(claim: Claim, evidence: list[EvidenceItem], stance: str) -> tuple[s
 
 
 def critique(claim: Claim, evidence: list[EvidenceItem]) -> tuple[CriticOutput, llm.Usage]:
+    """The model argues only where the judge model will read it (needs_judgment); an
+    unopposed filed-fact verdict is written by the rule, which quotes the offline critic."""
     stance, _ = decide(claim, evidence)
-    if llm.available():
+    if llm.available() and needs_judgment(claim, evidence):
         return _critique_llm(claim, evidence, stance)
     return critique_offline(claim, evidence), llm.OFFLINE
 

@@ -11,7 +11,7 @@ backdoor for reading numbers out of prose, which FR-22 reserves for the XBRL age
 """
 
 import re
-from functools import cache
+from functools import cache, lru_cache
 from itertools import pairwise
 from threading import Lock
 
@@ -86,7 +86,7 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, l
         return _insufficient("no 10-K/10-Q passages retrieved for this company"), llm.OFFLINE
     if llm.available():
         with lock:
-            periods = {f.id: f"{f.form_type} fiscal {f.fiscal_year} {f.fiscal_period}"
+            periods = {f.id: (f.form_type, f.fiscal_year, f.fiscal_period)
                        for f in s.scalars(select(Filing).where(
                            Filing.id.in_({h.filing_id for h in hits})))}
         return judge_llm(claim, hits, claim_context(s, claim, lock), periods)
@@ -96,18 +96,29 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, l
 def claim_context(s: Session, claim: Claim, lock: Lock) -> dict[str, str]:
     """The release text around the claim (section heading, neighbouring sentences): the claim
     span alone can drop its scope, e.g. "revenue was $89.0 billion" under a Data Center
-    heading. Call claims (segment_id) carry no filing text, so they get none."""
+    heading. Call claims (segment_id) carry no filing text, so they get none, and neither does
+    a claim whose span no longer matches the text (a re-parsed filing): wrong context is worse
+    than none."""
     if claim.filing_id is None:
         return {}
     from ledgerline.extract.refine import context  # extract pulls in the NER stack
-    from ledgerline.ingest.documents import load_text
 
     with lock:
-        filing = s.get(Filing, claim.filing_id)
+        path = s.get(Filing, claim.filing_id).storage_path
         fye = s.get(Company, claim.company_id).fiscal_year_end
-        text = load_text(filing)
+    text = _release_text(path)
+    if text[claim.span_start:claim.span_end] != claim.text:
+        return {}
     ctx = context(text, claim, claim.fiscal_year, claim.fiscal_period, fye)
     return {f"claim_{k}": v for k, v in ctx.items() if k != "claim" and v}
+
+
+@lru_cache(maxsize=16)
+def _release_text(storage_path: str) -> str:
+    """Parsed once per filing, not per claim; objects are content-addressed, so never stale."""
+    from ledgerline.ingest.documents import load_text
+
+    return load_text(Filing(storage_path=storage_path))
 
 
 def _insufficient(why: str, **payload) -> EvidenceItem:
@@ -142,18 +153,38 @@ class _Judgment(BaseModel):
     passage: int  # index into the passages given
     quote: str  # verbatim span from that passage
     summary: str
+    # Is the quoted figure a company-wide total? Defaults to True, the reading that blocks
+    # contradicting a scoped claim (see judge_llm).
+    passage_is_company_total: bool = True
+
+
+_SCOPED = ("Extraction judged this figure not a company total (a segment, product, region or "
+           "other part of the company); only a passage about that same part can contradict it.")
 
 
 def judge_llm(claim: Claim, hits: list[Hit], scope: dict[str, str] | None = None,
-              periods: dict[int, str] | None = None) -> tuple[EvidenceItem, llm.Usage]:
-    """periods: filing_id -> "10-Q fiscal 2025 Q1", so a passage from another reporting
-    period (or guidance restated later) is judged insufficient, never a contradiction."""
+              periods: dict[int, tuple[str, int | None, str | None]] | None = None,
+              ) -> tuple[EvidenceItem, llm.Usage]:
+    """periods: filing_id -> (form_type, fiscal_year, fiscal_period).
+
+    Contradiction rules enforced here, not left to the prompt: the quoted passage's filing
+    must be for the claim's own period (a passage from another period, or guidance restated
+    later, is insufficient); and a scoped claim (a value but no metric: extraction judged it
+    not a company total) cannot be contradicted by a company-total reading."""
     system, version = load_prompt("filing_rag")
     fy = claim.target_fiscal_year or claim.fiscal_year
     fp = claim.target_fiscal_period or claim.fiscal_period
+    periods = periods or {}
+    scoped = claim.value is not None and claim.metric is None
+
+    def label(h: Hit) -> str:
+        if (p := periods.get(h.filing_id)) is None:
+            return "filing period unknown"
+        return f"{p[0]} fiscal {p[1]} {p[2]}"
+
     data = ({"claim": claim.text, "claim_period": f"fiscal {fy} {fp}"} | (scope or {})
-            | {f"passage {i} ({(periods or {}).get(h.filing_id, 'filing period unknown')})": h.text
-               for i, h in enumerate(hits)})
+            | ({"claim_scope": _SCOPED} if scoped else {})
+            | {f"passage {i} ({label(h)})": h.text for i, h in enumerate(hits)})
     j, usage = llm.structured("standard", system, data, "Judge the claim against the passages.",
                               _Judgment)
     ok = 0 <= j.passage < len(hits) and j.quote and j.quote in hits[j.passage].text
@@ -163,6 +194,14 @@ def judge_llm(claim: Claim, hits: list[Hit], scope: dict[str, str] | None = None
     if j.stance == "insufficient" or not ok or (
             claim.value is not None and not mentions_value(j.quote, claim)):
         return _insufficient(j.summary, prompt_version=version), usage
+    if j.stance == "contradicts":
+        passage_period = periods.get(hits[j.passage].filing_id, (None, None, None))[1:]
+        if passage_period != (fy, fp):
+            return _insufficient("the contradicting passage is from another filing period",
+                                 prompt_version=version), usage
+        if scoped and j.passage_is_company_total:
+            return _insufficient("a company-total passage cannot contradict a scoped claim",
+                                 prompt_version=version), usage
     return EvidenceItem(
         agent="filing_rag", stance=j.stance, summary=j.summary, citations=cites,
         payload={"prompt_version": version, "section": hits[j.passage].section_path},
