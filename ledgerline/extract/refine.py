@@ -34,7 +34,7 @@ from ledgerline.extract.pipeline import _has_value, _heading_ctx, _key, _label_r
 from ledgerline.schemas import ClaimDraft, FiscalPeriod, Unit
 
 log = logging.getLogger(__name__)
-WORKERS = 16
+WORKERS = 4  # concurrent CLI calls; more mostly buys rate-limit retries
 _YEAR_SLACK = 2  # a target period more than this many years from the source is a misread
 
 
@@ -198,7 +198,9 @@ def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str) -> ClaimDraft:
         if metric != d.metric:
             upd["metric"] = metric
     target = (r.target_fiscal_year, r.target_fiscal_period) if r.target_fiscal_period else (None, None)
-    if d.target_fiscal_period is not None and target != (d.target_fiscal_year, d.target_fiscal_period) and (
+    # A period without a year is an incomplete reading, not a correction: leave the rules' one.
+    complete = target[1] is None or target[0] is not None
+    if complete and d.target_fiscal_period is not None and target != (d.target_fiscal_year, d.target_fiscal_period) and (
             target == (None, None) or (abs(target[0] - fy) <= _YEAR_SLACK
                                        and (d.claim_type == "guidance" or _key(*target) <= _key(fy, fp)))):
         upd |= {"target_fiscal_year": target[0], "target_fiscal_period": target[1]}

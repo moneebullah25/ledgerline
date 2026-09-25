@@ -148,6 +148,8 @@ def test_answers_are_cached_and_a_failed_call_fails_the_document(stub):
     (draft(claim_type="guidance", target_fiscal_year=None, target_fiscal_period=None), ok(), ("revenue", None, None)),
     # an unmapped claim never gains a metric
     (draft(metric=None), ok(), (None, 2026, "Q1")),
+    # a period without a year is incomplete: the rules' period stays (was a TypeError)
+    (draft(), ok(target_fiscal_year=None, target_fiscal_period="Q4"), ("revenue", 2026, "Q1")),
 ])
 def test_apply_guards(d, r, want):
     got = apply(d, r, 2026, "Q1")
