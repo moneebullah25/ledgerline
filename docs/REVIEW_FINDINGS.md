@@ -96,3 +96,42 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] I1 Segment claims keep their qualifier in the claim text ("Data Center revenue was $89.0 billion"), and overlapping-span duplicates are merged for metric=None claims too.
 - [x] I2 Loss synonyms: "net loss", "operating loss", "loss from operations", "net loss per share" extract as the signed concept with a negative value.
 - [x] I3 L4 and `l2 --current` filter on the current EXTRACTOR_VERSION; `--current` tie-break prefers the newest claim; L2 docstring/ERROR mapping matches the pipeline (refused unverifiable).
+
+# Round 3 — whole-app panel on the online system (2026-09-25): reality-checker, code-reviewer, security, api-tester, test-results-analyzer, performance-benchmarker
+
+## J. LLM backend + extraction (`llm.py`, `tracing.py`, `extract/**`, tests)
+- [ ] J1 CLI isolation: add `--no-session-persistence --setting-sources "" --disable-slash-commands` (verified with the installed CLI 2.1.281: a call with these left no ~/.claude/projects folder) and run the child with an allowlisted env (HOME, PATH, USER, TMPDIR, LANG only — no DB URL, API keys); test that argv carries the flags and never the prompt, and the cwd is a fresh temp dir.
+- [ ] J2 Infrastructure errors: CLI auth/logged-out errors, subprocess.TimeoutExpired (after retries), and SDK RateLimitError/APIConnectionError/APITimeoutError raise an infra error (`llm.RateLimited` or a sibling `LLMUnavailable`), never a per-claim ValueError. Transient detection must not match bare "429"/"529" inside unrelated text (match HTTP status / known phrases). `out['result']` may be null.
+- [ ] J3 No model output or raw stderr in exception messages that reach the public API: wrap pydantic ValidationError in a fixed-message ValueError; stderr to the log.
+- [ ] J4 refine: comparison claims may only be re-mapped to a concept with the same unit (blocker: "gross margin expanded 120 bps" -> gross_profit growth). Test with that input.
+- [ ] J5 refine runs after `_finish` dedupe and role filtering (no calls for dropped duplicates/analyst turns; no divergence between restatements).
+- [ ] J6 refine table context stops scanning upward at a value row once a header is collected (no header rows from a previous table).
+- [ ] J7 refine cache: unique temp file (mkstemp) + os.replace; a corrupt/unparseable cache loads as empty with a warning; key includes model id and Normalized schema; a cached entry that no longer validates is re-asked.
+- [ ] J8 refine returns its llm.Usage total so the caller can count it (the pipeline adds it to report cost, group K).
+- [ ] J9 EXTRACTOR_VERSION by mode: "s4-llm-1" only when the LLM pass ran; offline extraction writes the rules version, so claims are re-extracted when credentials appear.
+- [ ] J10 Heartbeat hook: `extract_for_filing(..., on_progress=None)` calls it per completed batch of refine calls, so the pipeline can refresh the report heartbeat during long LLM extraction.
+
+## K. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `db.py`, `models.py` + migration 0005, tests)
+- [ ] K1 int4 bounds: `claim_id` path param and claim cursor ids bounded to 1..2**31-1 -> 422, never a 500 (test 2147483648 and "9"*36).
+- [ ] K2 GET /v1/claims/{id}: verdict/evidence from the latest `done` report only (or document otherwise in CONTRACTS.md and the docstring).
+- [ ] K3 /healthz returns JSON 503 when the DB is down.
+- [ ] K4 ReportRequest strict (ConfigDict(strict=True)), reject quarters after the current date; document the soft queue cap (ponytail comment) or make it hard with a global advisory lock.
+- [ ] K5 Migration 0005: index verdict(claim_id, id); Evidence.cache_write_tokens column (persist it); size the DB pool to the worker concurrency.
+- [ ] K6 Parallel claim verification in run_report: ThreadPoolExecutor (default 4, config), one Session per worker for verify_claim, persist/heartbeat/commit on the main thread as futures complete; a shared rate-limit gate is not required if RateLimited fails the report.
+- [ ] K7 Budget guard (NFR-3): when the running cost exceeds budget x done/total, later claims use the offline critic and adjudicator (pass a flag through verify_claim); record in report.config that the guard fired.
+- [ ] K8 Cost accounting: refine's Haiku usage (J8) is added to report.cost_usd; include cache writes.
+- [ ] K9 Infra errors (J2's LLMUnavailable/RateLimited, auth) fail the report (re-queueable) instead of per-claim no-verdicts.
+- [ ] K10 Tests: a real two-connection concurrency test for POST dedupe; RateLimited through verify_claim fails the report (pipeline) — mirror the OperationalError test; API gaps (limit bounds on company claims, claim without verdict, failed report error field, 401 WWW-Authenticate).
+
+## L. Verification graph (`graph/**`, `schemas.py`, tests)
+- [ ] L1 Critic gating: use `critique_offline` when `not adjudicator.needs_judgment(...)` (no Sonnet critic on unopposed filed-fact verdicts); the offline rationale never quotes an online critic whose verdict is model=None.
+- [ ] L2 Implausible-gap abstentions get their own rationale ("filed fact differs by X%, likely a period or scope misreading") and are surfaced in the report as such — never the generic "no truth-bearing agent found evidence". Restrict the guard to USD and USD/share; percent concepts are measured in points (a margin 13 points off is a contradiction to rule on).
+- [ ] L3 Scoped claims: a claim with a value but no metric (extraction judged it not a company total) may not be contradicted by FilingRAG against a company-level reading; the judge must see the scope (claim_context) and a contradiction requires a passage about the same scope and period. Enforce the period rule in code: a `contradicts` whose quoted passage's filing period differs from the claim's period becomes insufficient.
+- [ ] L4 claim_context: return {} unless text[span_start:span_end] == claim.text; parse load_text outside db_lock with a per-filing cache.
+- [ ] L5 forecast `_chronos` model load under a lock; `deviation` when actual == 0 must not feed severity as an absolute amount.
+- [ ] L6 Tests: adjudicator rejects a non-unverifiable verdict whose citations are all unknown; needs_judgment's filing_rag branch with gating live; guard boundaries (49%/51%, over-claim, guidance/comparison excluded, range nearest bound); filing_rag negatives (different number in quote, passage=-1, empty quote); online `run()` path incl. claim_context (db test).
+
+## M. Evaluation (`evals/**`, held-out data, tests)
+- [ ] M1 Held-out golden set: >= 100 claims sampled (fixed new seed, stratified by company/type) from current s4-llm-1 claims NOT in golden.jsonl, labelled blind by the annotator BEFORE the system runs on them (same protocol and evidence recording as golden.jsonl), frozen in `evals/data/heldout.jsonl`; `python -m ledgerline.evals.l2 --set heldout`; report metrics with 95% Clopper-Pearson intervals (contradiction precision/recall, accuracy) in both L2 variants.
+- [ ] M2 L3 robustness: per-claim ValueError recorded (not aborting), evidence missing for unmatched/errored ids skipped and counted, workers validated (>=1).
+- [ ] M3 l2 workers capped below the DB pool; document in the eval-gate workflow that the gate covers the offline system only and how to record an online baseline.
