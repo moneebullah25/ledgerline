@@ -9,12 +9,14 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from ledgerline.llm import LLMUnavailable
 from ledgerline.models import Span
 
 # Exception types whose message is written for the reader (a missing quarter, an unsupported
-# request). Anything else, e.g. a DB error quoting SQL or an integrity failure quoting
-# rejected model output, is summarised by class name only; the traceback goes to the log.
-_READABLE = (LookupError, ValueError)
+# request, an unreachable model: llm keeps model output and CLI stderr out of its messages).
+# Anything else, e.g. a DB error quoting SQL or an integrity failure quoting rejected model output,
+# is summarised by class name only; the traceback goes to the log.
+_READABLE = (LookupError, ValueError, LLMUnavailable)
 
 
 def error_summary(e: BaseException, limit: int = 300) -> str:
