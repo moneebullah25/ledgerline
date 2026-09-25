@@ -3,6 +3,7 @@
     python -m ledgerline.evals.golden sample      # stratified draw -> data/golden_sample.jsonl
     python -m ledgerline.evals.golden worksheet [--ids g001,g002] [--pass2]
     python -m ledgerline.evals.golden perturb     # data/golden_perturbed.jsonl from golden.jsonl
+    python -m ledgerline.evals.golden sample-heldout   # -> data/heldout_sample.jsonl
 
 Records are self-contained snapshots of the claim fields, so the set stays frozen when
 extraction is re-run and claim ids change; the source filing is located by accession number.
@@ -44,8 +45,16 @@ DATA = Path(__file__).with_name("data")
 GOLDEN = DATA / "golden.jsonl"
 SAMPLE = DATA / "golden_sample.jsonl"
 PERTURBED = DATA / "golden_perturbed.jsonl"
+HELDOUT = DATA / "heldout.jsonl"
+HELDOUT_SAMPLE = DATA / "heldout_sample.jsonl"
 SEED = 20260923
 QUOTA = {"reported_result": 90, "comparison": 45, "guidance": 25, "qualitative": 40}
+# Held-out set (M1): a new seed, today's extractor, nothing golden.jsonl already covers.
+# "guidance_known" = guidance whose target period has a stored 10-Q/10-K (an outcome to check).
+HELDOUT_EXTRACTOR = "s4-llm-1"
+HELDOUT_SEED = 20260925
+HELDOUT_QUOTA = {"reported_result": 40, "comparison": 25, "guidance_known": 20, "guidance": 5,
+                 "qualitative": 20}
 LABELS = ("supported", "contradicted", "unverifiable")
 FIELDS = ("text", "claim_type", "metric", "value", "value_high", "unit", "fiscal_year",
           "fiscal_period", "target_fiscal_year", "target_fiscal_period", "comparison",
@@ -144,6 +153,46 @@ def sample(s: Session) -> list[dict]:
               for c, t, acc in rows]
     picked = stratified(claims, QUOTA)
     return [{"id": f"g{i + 1:03d}", **{k: v for k, v in c.items()
+                                      if k not in ("claim_type", "metric")}}
+            for i, c in enumerate(picked)]
+
+
+def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
+    return a[0] < b[1] and b[0] < a[1]
+
+
+def heldout_candidates(claims: list[dict], golden: list[dict], judged: set[int]) -> list[dict]:
+    """Claims that share no filing span with a golden record and that the system has never
+    verified (`judged` = claim ids with a verdict row), so labels are blind to its output."""
+    spans = defaultdict(list)
+    for g in golden:
+        spans[g["accession_no"]].append(tuple(g["span"]))
+    return [c for c in claims if c["source_claim_id"] not in judged
+            and not any(_overlaps(tuple(c["span"]), sp) for sp in spans[c["accession_no"]])]
+
+
+def sample_heldout(s: Session) -> list[dict]:
+    rows = s.execute(text("""
+        SELECT c.id, co.ticker, f.accession_no, c.claim_type = 'guidance' AND EXISTS (
+                 SELECT 1 FROM filing p WHERE p.company_id = c.company_id
+                   AND p.form_type IN ('10-Q', '10-K') AND p.fiscal_year = c.target_fiscal_year
+                   AND (p.fiscal_period = c.target_fiscal_period
+                        OR (c.target_fiscal_period = 'Q4' AND p.fiscal_period = 'FY')))
+        FROM claim c JOIN company co ON co.id = c.company_id JOIN filing f ON f.id = c.filing_id
+        WHERE c.extractor_version = :v"""), {"v": HELDOUT_EXTRACTOR}).all()
+    known = {cid for cid, _, _, k in rows if k}
+    meta = {cid: (t, acc) for cid, t, acc, _ in rows}
+    judged = set(s.scalars(text("SELECT DISTINCT claim_id FROM verdict")))
+    claims = []
+    for c in s.scalars(select(Claim).where(Claim.id.in_(meta))):
+        t, acc = meta[c.id]
+        claims.append({"source_claim_id": c.id, "ticker": t, "accession_no": acc,
+                       "extractor_version": c.extractor_version, "span": [c.span_start, c.span_end],
+                       "claim_type": "guidance_known" if c.id in known else c.claim_type,
+                       "metric": c.metric, "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}})
+    picked = stratified(heldout_candidates(claims, load(GOLDEN), judged), HELDOUT_QUOTA,
+                        HELDOUT_SEED)
+    return [{"id": f"h{i + 1:03d}", **{k: v for k, v in c.items()
                                       if k not in ("claim_type", "metric")}}
             for i, c in enumerate(picked)]
 
@@ -382,8 +431,8 @@ def main(argv: list[str] | None = None) -> None:
     from ledgerline.db import session
 
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.golden")
-    p.add_argument("cmd", choices=("sample", "worksheet", "perturb", "dump-fixture",
-                                   "load-fixture"))
+    p.add_argument("cmd", choices=("sample", "sample-heldout", "worksheet", "perturb",
+                                   "dump-fixture", "load-fixture"))
     p.add_argument("--ids", help="comma-separated golden ids (worksheet)")
     p.add_argument("--source", type=Path, default=None, help="records file (worksheet)")
     p.add_argument("--pass2", action="store_true", help="worksheet without XBRL rows")
@@ -404,6 +453,11 @@ def main(argv: list[str] | None = None) -> None:
             recs = sample(s)
             _write(SAMPLE, recs)
             print(f"wrote {len(recs)} sampled claims to {SAMPLE}")
+            return
+        if a.cmd == "sample-heldout":
+            recs = sample_heldout(s)
+            _write(HELDOUT_SAMPLE, recs)
+            print(f"wrote {len(recs)} sampled claims to {HELDOUT_SAMPLE}")
             return
         src = a.source or (GOLDEN if GOLDEN.exists() else SAMPLE)
         recs = [json.loads(x) for x in src.read_text().splitlines() if x.strip()]
