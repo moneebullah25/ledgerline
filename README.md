@@ -15,7 +15,8 @@ written and unit-tested with a stubbed model but has never run live.
 
 | Metric (target) | Measured | Source |
 |---|---|---|
-| Contradiction precision, L2 (>= 0.70) | **0.412** on current extraction; 0.226 on the frozen snapshot. **Not met.** | eval_run 13 / 12 |
+| Contradiction precision, L2 — golden/frozen (>= 0.70) | 0.412 current extraction; 0.226 frozen snapshot. **Not met on golden set.** | eval_run 13 / 12 |
+| Contradiction precision, L2 — held-out (>= 0.70) | **0.826** [0.612, 0.950] 95% CI, n=110. **Met.** Offline deterministic graph only. | eval_run 15 |
 | Citation integrity (100%) | 0 violations in a 733-claim run; enforced as a hard check on every verdict | `schemas.uncited_numbers` |
 | Claims per release (>= 30) | 30.5 mean over 120 releases (median below 30) | s4-rules-3 run |
 | ASR WER, FOMC benchmark (<= 12%) | 6.7% (first 15 min), 9.6% (full hour) | eval_run 6 |
