@@ -26,7 +26,7 @@ from ledgerline.graph import load_prompt
 from ledgerline.graph.adjudicator import audit
 from ledgerline.graph.agents.xbrl_table import mentions_value
 from ledgerline.graph.state import Ctx
-from ledgerline.models import Claim, Filing
+from ledgerline.models import Claim, Company, Filing
 from ledgerline.schemas import Citation, EvidenceItem, Stance
 from ledgerline.store import embed
 from ledgerline.store.retrieval import Hit, search
@@ -85,8 +85,25 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, l
     if not hits:
         return _insufficient("no 10-K/10-Q passages retrieved for this company"), llm.OFFLINE
     if llm.available():
-        return judge_llm(claim, hits)
+        return judge_llm(claim, hits, claim_context(s, claim, lock))
     return assess(claim, hits, nli), llm.OFFLINE
+
+
+def claim_context(s: Session, claim: Claim, lock: Lock) -> dict[str, str]:
+    """The release text around the claim (section heading, neighbouring sentences): the claim
+    span alone can drop its scope, e.g. "revenue was $89.0 billion" under a Data Center
+    heading. Call claims (segment_id) carry no filing text, so they get none."""
+    if claim.filing_id is None:
+        return {}
+    from ledgerline.extract.refine import context  # extract pulls in the NER stack
+    from ledgerline.ingest.documents import load_text
+
+    with lock:
+        filing = s.get(Filing, claim.filing_id)
+        fye = s.get(Company, claim.company_id).fiscal_year_end
+        text = load_text(filing)
+    ctx = context(text, claim, claim.fiscal_year, claim.fiscal_period, fye)
+    return {f"claim_{k}": v for k, v in ctx.items() if k != "claim" and v}
 
 
 def _insufficient(why: str, **payload) -> EvidenceItem:
@@ -123,9 +140,11 @@ class _Judgment(BaseModel):
     summary: str
 
 
-def judge_llm(claim: Claim, hits: list[Hit]) -> tuple[EvidenceItem, llm.Usage]:
+def judge_llm(claim: Claim, hits: list[Hit],
+              scope: dict[str, str] | None = None) -> tuple[EvidenceItem, llm.Usage]:
     system, version = load_prompt("filing_rag")
-    data = {"claim": claim.text} | {f"passage {i}": h.text for i, h in enumerate(hits)}
+    data = ({"claim": claim.text} | (scope or {})
+            | {f"passage {i}": h.text for i, h in enumerate(hits)})
     j, usage = llm.structured("standard", system, data, "Judge the claim against the passages.",
                               _Judgment)
     ok = 0 <= j.passage < len(hits) and j.quote and j.quote in hits[j.passage].text

@@ -29,3 +29,21 @@ def test_data_blocks_use_a_nonce_tag_the_text_cannot_close(monkeypatch):
     assert body.count(f"</{tags[0]}>") == 2
     inner = body.replace(f"<{tags[0]} ", "").replace(f"</{tags[0]}>", "").lower()
     assert "<document" not in inner and "</document" not in inner
+
+
+def test_filing_judge_sees_the_claims_release_context(monkeypatch):
+    from ledgerline.graph.agents import filing_rag
+    from ledgerline.store.retrieval import Hit
+
+    seen = {}
+
+    def structured(tier, system, data, instruction, schema):
+        seen.update(data)
+        return schema(passage=0, quote="Data Center revenue was $89.0 billion", stance="supports",
+                      summary="supports"), llm.OFFLINE
+    monkeypatch.setattr(llm, "structured", structured)
+    claim = SimpleNamespace(text="revenue was $89.0 billion", value=89e9, value_high=None,
+                            unit="USD", comparison=None, metric=None)
+    hit = Hit(1, 2, "MD&A", "Data Center revenue was $89.0 billion, up 18%.", 1.0, 0, 10)
+    ev, _ = filing_rag.judge_llm(claim, [hit], {"claim_section_heading": "Data Center"})
+    assert seen["claim_section_heading"] == "Data Center" and ev.stance == "supports"
