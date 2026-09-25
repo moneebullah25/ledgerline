@@ -288,3 +288,12 @@ def test_judge_model_only_when_judgment_is_needed(online, monkeypatch):
     rag = ev("filing_rag", "contradicts", [Citation(kind="chunk", ref_id=5, quote="q")])
     assert adjudicator.needs_judgment(CLAIM, [XBRL, rag])  # agents disagree
     assert not adjudicator.needs_judgment(CLAIM, [XBRL])
+
+
+def test_offline_rationale_drops_a_critic_argument_it_cannot_cite():
+    # A live critic may cite another agent's number (a price move); the rule's rationale
+    # cites only the deciding agent, so it names the point instead of quoting it.
+    loose = CriticOutput(counter_stance="contradicts", argument="Shares moved 8.4% after the release.",
+                         weakest_evidence="market_reaction:context")
+    v, _, _ = adjudicator.adjudicate(CLAIM, [XBRL], loose)
+    assert "8.4" not in v.rationale and "market_reaction:context" in v.rationale

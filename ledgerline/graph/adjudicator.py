@@ -161,7 +161,11 @@ def _adjudicate_offline(
                      f"the {e.agent} evidence takes precedence under the dominance rule.")
     if critic and critic.weakest_evidence:
         conf -= 0.1
-        parts.append(f"Critic: {critic.argument}")
+        # The critic's argument was audited against all evidence, this rationale only against
+        # the deciding agent's citations: quote it only if it passes here, else name its point.
+        quoted = not audit(critic.argument, e.citations, claim.text)
+        parts.append(f"Critic: {critic.argument}" if quoted
+                     else f"Critic flagged a weak point ({critic.weakest_evidence}).")
     label = expected_label(claim, evidence)
     rationale = f"{label.capitalize()}. " + " ".join(parts)
     cites = list(e.citations)
