@@ -192,7 +192,7 @@ def test_findings_grouped_by_label_and_no_verdict_rendered(db):
     vs = db.query(Verdict).filter_by(report_id=report.id).order_by(Verdict.claim_id).all()
     vs[1].label, vs[1].severity = "supported", 5.0
     vs[2].label, vs[2].refused, vs[2].severity = "unverifiable", True, 0.0
-    vs[2].rationale = "No evidence."
+    vs[2].rationale, vs[2].citations = "No evidence.", []  # a refusal cites nothing
     vs[3].label, vs[3].refused, vs[3].severity = "unverifiable", True, 0.0
     vs[3].rationale = "No verdict: RuntimeError while verifying the claim."
     vs[3].citations = []
@@ -203,3 +203,19 @@ def test_findings_grouped_by_label_and_no_verdict_rendered(db):
     md = to_markdown(view)
     assert "unverifiable (no verdict: RuntimeError while verifying the claim)" in md
     assert md.count("(refused: no evidence)") == 1
+
+
+@pytest.mark.db
+def test_implausible_gap_refusal_is_not_rendered_as_no_evidence(db):
+    """Graph L2: a refusal that cites the filed fact was not ruled on (likely a period or
+    scope misreading); it must not read as "no evidence"."""
+    report = seed_report(db, n_claims=1)
+    v = db.query(Verdict).filter_by(report_id=report.id).one()
+    v.label, v.refused, v.confidence, v.severity = "unverifiable", True, 1.0, 0.0
+    v.rationale = ("Unverifiable. The filed fact differs from the claimed value by 60%, likely a "
+                   "period or scope misreading rather than a misstatement, so it is not ruled on.")
+    v.citations = v.citations[:1]
+    db.flush()
+    md = to_markdown(build_report(db, report.id))
+    assert "unverifiable (not ruled on: likely period or scope misreading)" in md
+    assert "refused: no evidence" not in md

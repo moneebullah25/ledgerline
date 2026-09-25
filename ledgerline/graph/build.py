@@ -113,7 +113,8 @@ def _refusal_check(state: GraphState, config) -> dict:
 
 def _critic(state: GraphState, config) -> dict:
     with config["configurable"]["tracer"].span("critic") as a:
-        out, usage = critic.critique(state["claim"], state["evidence"])
+        out, usage = critic.critique(state["claim"], state["evidence"],
+                                     config["configurable"].get("offline", False))
         _record(a, usage)
         a["counter_stance"], a["weakest_evidence"] = out.counter_stance, out.weakest_evidence
     return {"critic": out, "usages": [("critic", usage)]}
@@ -122,7 +123,8 @@ def _critic(state: GraphState, config) -> dict:
 def _adjudicator(state: GraphState, config) -> dict:
     with config["configurable"]["tracer"].span("adjudicator") as a:
         verdict, usage, model = adjudicator.adjudicate(state["claim"], state["evidence"],
-                                                       state["critic"])
+                                                       state["critic"],
+                                                       config["configurable"].get("offline", False))
         _record(a, usage)
         a["label"], a["confidence"] = verdict.label, verdict.confidence
     return {"verdict": verdict, "model": model, "usages": [("adjudicator", usage)]}
@@ -164,9 +166,11 @@ def context(s: Session, claim: Claim) -> Ctx:
 
 
 def verify_claim(s: Session, claim: Claim, tracer: Tracer,
-                 agents: dict[AgentName, AgentFn] | None = None) -> VerifyResult:
+                 agents: dict[AgentName, AgentFn] | None = None,
+                 offline: bool = False) -> VerifyResult:
     """agents replaces entries of AGENTS for this call only (evaluation ablations); passed
-    through the graph config, so concurrent calls do not share a patched global."""
+    through the graph config, so concurrent calls do not share a patched global. offline
+    forces the deterministic critic and adjudicator (the pipeline's budget guard, NFR-3)."""
     # Load every column now, on this thread: an expired attribute would otherwise lazy-load
     # through the Session from inside an agent thread, outside db_lock.
     for col in Claim.__table__.columns:
@@ -175,7 +179,7 @@ def verify_claim(s: Session, claim: Claim, tracer: Tracer,
         out = graph().invoke(
             {"claim": claim, "ctx": context(s, claim), "evidence": [], "usages": []},
             config={"configurable": {"session": s, "tracer": tracer,
-                                     "agents": AGENTS | (agents or {})}},
+                                     "agents": AGENTS | (agents or {}), "offline": offline}},
         )
         usages = out["usages"]
         cost = sum(u.cost_usd for _, u in usages)

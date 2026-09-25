@@ -112,16 +112,16 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 - [x] J10 Heartbeat hook: `extract_for_filing(..., on_progress=None)` calls it per completed batch of refine calls, so the pipeline can refresh the report heartbeat during long LLM extraction.
 
 ## K. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `db.py`, `models.py` + migration 0005, tests)
-- [ ] K1 int4 bounds: `claim_id` path param and claim cursor ids bounded to 1..2**31-1 -> 422, never a 500 (test 2147483648 and "9"*36).
-- [ ] K2 GET /v1/claims/{id}: verdict/evidence from the latest `done` report only (or document otherwise in CONTRACTS.md and the docstring).
-- [ ] K3 /healthz returns JSON 503 when the DB is down.
-- [ ] K4 ReportRequest strict (ConfigDict(strict=True)), reject quarters after the current date; document the soft queue cap (ponytail comment) or make it hard with a global advisory lock.
-- [ ] K5 Migration 0005: index verdict(claim_id, id); Evidence.cache_write_tokens column (persist it); size the DB pool to the worker concurrency.
-- [ ] K6 Parallel claim verification in run_report: ThreadPoolExecutor (default 4, config), one Session per worker for verify_claim, persist/heartbeat/commit on the main thread as futures complete; a shared rate-limit gate is not required if RateLimited fails the report.
-- [ ] K7 Budget guard (NFR-3): when the running cost exceeds budget x done/total, later claims use the offline critic and adjudicator (pass a flag through verify_claim); record in report.config that the guard fired.
-- [ ] K8 Cost accounting: refine's Haiku usage (J8) is added to report.cost_usd; include cache writes.
-- [ ] K9 Infra errors (J2's LLMUnavailable/RateLimited, auth) fail the report (re-queueable) instead of per-claim no-verdicts.
-- [ ] K10 Tests: a real two-connection concurrency test for POST dedupe; RateLimited through verify_claim fails the report (pipeline) — mirror the OperationalError test; API gaps (limit bounds on company claims, claim without verdict, failed report error field, 401 WWW-Authenticate).
+- [x] K1 int4 bounds: `claim_id` path param and claim cursor ids bounded to 1..2**31-1 -> 422, never a 500 (test 2147483648 and "9"*36).
+- [x] K2 GET /v1/claims/{id}: verdict/evidence from the latest `done` report only (or document otherwise in CONTRACTS.md and the docstring).
+- [x] K3 /healthz returns JSON 503 when the DB is down.
+- [x] K4 ReportRequest strict (ConfigDict(strict=True)), reject quarters after the current date; document the soft queue cap (ponytail comment) or make it hard with a global advisory lock.
+- [x] K5 Migration 0005: index verdict(claim_id, id); Evidence.cache_write_tokens column (persist it); size the DB pool to the worker concurrency.
+- [x] K6 Parallel claim verification in run_report: ThreadPoolExecutor (default 4, config), one Session per worker for verify_claim, persist/heartbeat/commit on the main thread as futures complete; a shared rate-limit gate is not required if RateLimited fails the report.
+- [x] K7 Budget guard (NFR-3): when the running cost exceeds budget x done/total, later claims use the offline critic and adjudicator (pass a flag through verify_claim); record in report.config that the guard fired.
+- [x] K8 Cost accounting: refine's Haiku usage (J8) is added to report.cost_usd; include cache writes.
+- [x] K9 Infra errors (J2's LLMUnavailable/RateLimited, auth) fail the report (re-queueable) instead of per-claim no-verdicts.
+- [x] K10 Tests: a real two-connection concurrency test for POST dedupe; RateLimited through verify_claim fails the report (pipeline) — mirror the OperationalError test; API gaps (limit bounds on company claims, claim without verdict, failed report error field, 401 WWW-Authenticate).
 
 ## L. Verification graph (`graph/**`, `schemas.py`, tests)
 - [x] L1 Critic gating: use `critique_offline` when `not adjudicator.needs_judgment(...)` (no Sonnet critic on unopposed filed-fact verdicts); the offline rationale never quotes an online critic whose verdict is model=None.

@@ -118,8 +118,10 @@ def _describe(claim: Claim, e: EvidenceItem) -> str:
 
 def adjudicate(
     claim: Claim, evidence: list[EvidenceItem], critic: CriticOutput | None,
+    offline: bool = False,
 ) -> tuple[VerdictDraft, llm.Usage, str | None]:
     """(verdict, spend, model that wrote the verdict; None for the offline rule).
+    offline forces the rule (the pipeline's budget guard, NFR-3).
 
     The judge model is called only when judgment is needed (§14 cost): truth-bearing agents
     disagree, or a filing passage decides. An unopposed filed-fact verdict is arithmetic,
@@ -127,7 +129,7 @@ def adjudicate(
     The rule quotes only the offline critic: an online critic's argument is not the rule's to
     repeat under a verdict reported with model None.
     """
-    if llm.available() and needs_judgment(claim, evidence):
+    if not offline and llm.available() and needs_judgment(claim, evidence):
         return _adjudicate_llm(claim, evidence, critic)
     return _adjudicate_offline(claim, evidence, _offline_critic(claim, evidence)), llm.OFFLINE, None
 

@@ -89,7 +89,11 @@ EXTRACTOR_VERSION: str
 ## S5/S6 Verification graph — `ledgerline/graph/`
 
 ```python
-def verify_claim(s: Session, claim: Claim, tracer: Tracer) -> VerifyResult
+def verify_claim(s: Session, claim: Claim, tracer: Tracer,
+                 agents: dict[AgentName, AgentFn] | None = None,
+                 offline: bool = False) -> VerifyResult
+# offline=True forces the deterministic critic and adjudicator (the report budget guard).
+# The Session is used by this call only: run_report gives each parallel claim its own.
 # VerifyResult(verdict: VerdictDraft, evidence: list[EvidenceItem], critic: CriticOutput | None,
 #              refused: bool, prompt_version: str, model: str | None, cost_usd: float,
 #              usages: list[tuple[str, Usage]])
@@ -104,8 +108,17 @@ def route(claim: Claim) -> list[AgentName]      # pure function, unit-tested wit
 def severity(verdict_label, confidence, deviation, hedging_score, abnormal_return,
              weights: SeverityWeights) -> float   # §10.7, config-driven weighted sum
 def run_report(s: Session, report_id: UUID) -> None    # the whole flow for one company-quarter
+# Claims verify in parallel (LEDGERLINE_VERIFY_WORKERS, default 4; the DB pool is sized to
+# it), one Session each; results are persisted and committed on the caller's thread. Cost =
+# sum(verdict.cost_usd) + report.config["extract_cost_usd"] (the refine pass). Budget guard:
+# once spend runs ahead of COST_BUDGET_USD x finished/total, later claims run offline and
+# report.config["budget_guard"] records it. llm.LLMUnavailable (RateLimited, auth, timeouts),
+# DB errors and ImportError fail the report; any other per-claim error is a no-verdict claim.
 ```
 
-API (§15): `POST /v1/reports` -> 202 `{job_id}`; `GET /v1/reports/{id}`; `GET /v1/reports`
-(cursor pagination); `GET /v1/claims/{id}` (claim + evidence + verdict + trace);
-`GET /v1/companies/{ticker}/claims`; `GET /v1/evals/latest` (public).
+API (§15): `POST /v1/reports` -> 202 `{job_id}` (strict body; a quarter that cannot have
+ended yet is 422); `GET /v1/reports/{id}`; `GET /v1/reports` (cursor pagination);
+`GET /v1/claims/{id}` (claim + evidence + verdict + trace, from the latest `done` report that
+verified the claim; `verdict: null` if none; an id outside 1..2**31-1 is 422);
+`GET /v1/companies/{ticker}/claims`; `GET /v1/evals/latest` (public); `GET /healthz`
+(200 `{"status": "ok"}`, JSON 503 when the database is unreachable).

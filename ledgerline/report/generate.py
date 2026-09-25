@@ -75,7 +75,7 @@ class ReportView(BaseModel):
     cost_usd: float | None
     error: str | None
     mode: str | None  # "online" or OFFLINE, as recorded when the run started; None: never run
-    warnings: list[str]  # budget overruns (NFR-1 latency, NFR-3 cost)
+    warnings: list[str]  # budget overruns (NFR-1 latency, NFR-3 cost) and the cost guard firing
     claims: list[Finding]
 
 
@@ -173,6 +173,9 @@ def build_report(s: Session, report_id: uuid.UUID) -> ReportView | None:
     if report.cost_usd is not None and report.cost_usd > COST_BUDGET_USD:
         warnings.append(f"cost {report.cost_usd:.2f} USD is over the {COST_BUDGET_USD:.2f} USD "
                         "budget (NFR-3)")
+    if guard := report.config.get("budget_guard"):
+        warnings.append(f"budget guard: claims after {guard['after_claims']} of {guard['of']} "
+                        "used the offline critic and adjudicator (NFR-3)")
     if report.latency_s is not None and report.latency_s > LATENCY_BUDGET_S:
         warnings.append(f"latency {report.latency_s / 60:.1f} min is over the "
                         f"{LATENCY_BUDGET_S // 60} min budget (NFR-1)")
@@ -206,6 +209,8 @@ def to_markdown(view: ReportView) -> str:
     for rank, f in enumerate(view.claims, 1):
         if f.refused and f.rationale.startswith(NO_VERDICT):
             note = f" (no verdict: {f.rationale.removeprefix(NO_VERDICT).rstrip('.')})"
+        elif f.refused and f.sources:  # graph L2: the filed fact is cited but not ruled on
+            note = " (not ruled on: likely period or scope misreading)"
         else:
             note = " (refused: no evidence)" if f.refused else ""
         lines += [
