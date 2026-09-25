@@ -247,6 +247,7 @@ class Evidence(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     trace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
@@ -273,6 +274,7 @@ class Verdict(Base):
     trace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
     __table_args__ = (
         UniqueConstraint("report_id", "claim_id", name="uq_verdict"),
+        Index("ix_verdict_claim", "claim_id", "id"),  # GET /v1/claims/{id}: latest verdict
         CheckConstraint(_in("label", VERDICT_LABELS), name="label"),
         CheckConstraint("confidence BETWEEN 0 AND 1", name="confidence"),
     )
