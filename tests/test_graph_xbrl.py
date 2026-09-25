@@ -205,8 +205,8 @@ def test_total_with_an_included_part_is_still_compared():
     claim = C("Diluted EPS, including a charge of $0.10, was $2.00", 2.0, unit="USD/share",
               metric="eps_diluted")
     assert assess(claim, [F(2.0, unit="USD/share", concept="eps_diluted")]).stance == "supports"
-    assert assess(C("diluted EPS of $0.30", 0.3, unit="USD/share", metric="eps_diluted"),
-                  [F(6.62, unit="USD/share", concept="eps_diluted")]).stance == "contradicts"
+    assert assess(C("diluted EPS of $2.30", 2.3, unit="USD/share", metric="eps_diluted"),
+                  [F(2.62, unit="USD/share", concept="eps_diluted")]).stance == "contradicts"
 
 
 def test_company_defined_free_cash_flow_mismatch_is_insufficient():
@@ -218,3 +218,13 @@ def test_company_defined_free_cash_flow_mismatch_is_insufficient():
     assert ev.stance == "insufficient" and ev.payload["actual"] == 13_563e6
     assert assess(C("Free cash flow was $13.56 billion", 13.56e9, metric="free_cash_flow"),
                   [fcf]).stance == "supports"
+
+
+def test_implausible_gap_abstains_but_a_real_misstatement_contradicts():
+    # A quarterly $2.80 EPS compared with the full-year 11.39: a misread period, not a lie.
+    eps = C("Diluted earnings per share was $2.80", 2.80, unit="USD/share", metric="eps_diluted",
+            claim_type="reported_result")
+    far = assess(eps, [F(11.39, concept="eps_diluted", unit="USD/share")])
+    assert far.stance == "insufficient" and "misreading" in far.summary
+    near = C("revenue of $110.0 billion", 110.0e9, claim_type="reported_result")
+    assert assess(near, [F(94_930e6)]).stance == "contradicts"  # 16% off: a claim to rule on

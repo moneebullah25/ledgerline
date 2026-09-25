@@ -59,6 +59,11 @@ from ledgerline.schemas import Citation, EvidenceItem
 from ledgerline.store.xbrl_query import Fact, get_xbrl_fact
 
 REL_TOL = 0.005
+# A reported figure more than this far (relative) from the filed one is almost always a
+# misread period or scope (a quarter read as the year, dividends read as cash flow), not a
+# misstatement: the agent abstains instead of contradicting. Perturbed test claims move
+# 15-25%, well inside it.
+IMPLAUSIBLE_GAP = 0.5
 PP_TOL = 0.1
 _SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
@@ -245,6 +250,13 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     cites.append(Citation(kind="computed", ref_id=f"{ref}:tolerance", value=tol, unit=claim.unit))
 
     ok = abs(err) <= tol
+    # Same sign only: a loss claimed against a filed profit (or the reverse) is a real
+    # contradiction, not a misread scale.
+    if (not ok and claim.claim_type == "reported_result" and claim.comparison is None
+            and abs(deviation) > IMPLAUSIBLE_GAP and lo * actual > 0):
+        return _insufficient(f"claimed value is {abs(deviation):.0%} from the {what}: more "
+                             "likely a period or scope misreading than a misstatement",
+                             actual=actual, deviation=deviation)
     if not ok and claim.metric in _COMPANY_DEFINED:
         return _insufficient(f"{claim.metric} is company-defined; the derived definition does "
                              "not match and no filed fact carries the company's", actual=actual)

@@ -43,7 +43,10 @@ def test_filing_judge_sees_the_claims_release_context(monkeypatch):
                       summary="supports"), llm.OFFLINE
     monkeypatch.setattr(llm, "structured", structured)
     claim = SimpleNamespace(text="revenue was $89.0 billion", value=89e9, value_high=None,
-                            unit="USD", comparison=None, metric=None)
+                            unit="USD", comparison=None, metric=None, fiscal_year=2027,
+                            fiscal_period="Q2", target_fiscal_year=None, target_fiscal_period=None)
     hit = Hit(1, 2, "MD&A", "Data Center revenue was $89.0 billion, up 18%.", 1.0, 0, 10)
-    ev, _ = filing_rag.judge_llm(claim, [hit], {"claim_section_heading": "Data Center"})
+    ev, _ = filing_rag.judge_llm(claim, [hit], {"claim_section_heading": "Data Center"},
+                                 {2: "10-Q fiscal 2027 Q2"})
     assert seen["claim_section_heading"] == "Data Center" and ev.stance == "supports"
+    assert seen["claim_period"] == "fiscal 2027 Q2" and "passage 0 (10-Q fiscal 2027 Q2)" in seen

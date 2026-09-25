@@ -85,7 +85,11 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, l
     if not hits:
         return _insufficient("no 10-K/10-Q passages retrieved for this company"), llm.OFFLINE
     if llm.available():
-        return judge_llm(claim, hits, claim_context(s, claim, lock))
+        with lock:
+            periods = {f.id: f"{f.form_type} fiscal {f.fiscal_year} {f.fiscal_period}"
+                       for f in s.scalars(select(Filing).where(
+                           Filing.id.in_({h.filing_id for h in hits})))}
+        return judge_llm(claim, hits, claim_context(s, claim, lock), periods)
     return assess(claim, hits, nli), llm.OFFLINE
 
 
@@ -140,11 +144,16 @@ class _Judgment(BaseModel):
     summary: str
 
 
-def judge_llm(claim: Claim, hits: list[Hit],
-              scope: dict[str, str] | None = None) -> tuple[EvidenceItem, llm.Usage]:
+def judge_llm(claim: Claim, hits: list[Hit], scope: dict[str, str] | None = None,
+              periods: dict[int, str] | None = None) -> tuple[EvidenceItem, llm.Usage]:
+    """periods: filing_id -> "10-Q fiscal 2025 Q1", so a passage from another reporting
+    period (or guidance restated later) is judged insufficient, never a contradiction."""
     system, version = load_prompt("filing_rag")
-    data = ({"claim": claim.text} | (scope or {})
-            | {f"passage {i}": h.text for i, h in enumerate(hits)})
+    fy = claim.target_fiscal_year or claim.fiscal_year
+    fp = claim.target_fiscal_period or claim.fiscal_period
+    data = ({"claim": claim.text, "claim_period": f"fiscal {fy} {fp}"} | (scope or {})
+            | {f"passage {i} ({(periods or {}).get(h.filing_id, 'filing period unknown')})": h.text
+               for i, h in enumerate(hits)})
     j, usage = llm.structured("standard", system, data, "Judge the claim against the passages.",
                               _Judgment)
     ok = 0 <= j.passage < len(hits) and j.quote and j.quote in hits[j.passage].text

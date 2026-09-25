@@ -7,6 +7,11 @@ claim_section_heading are the release text around the claim. They set its scope:
 "revenue was $89.0 billion" under a "Data Center" heading is a Data Center revenue claim.
 Judge the claim as that context scopes it.
 
+Each passage is labelled with the filing and fiscal period it comes from, and claim_period
+is the period the claim is about. A passage about a different period, or guidance given in
+a different filing, cannot contradict the claim (guidance changes over time): that is
+insufficient.
+
 Decide whether the passages support the claim, contradict it, or are insufficient.
 
 - supports: a passage states the same fact, for the same period and scope.
