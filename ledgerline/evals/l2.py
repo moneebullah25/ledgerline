@@ -44,7 +44,6 @@ re-mapped span that covers different words is still scored against it.
 
 import argparse
 import json
-import math
 import subprocess
 import sys
 from collections import Counter
@@ -81,23 +80,13 @@ SETS = {"golden": GOLDEN, "heldout": HELDOUT}
 
 
 def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> list[float] | None:
-    """Exact two-sided (1 - alpha) binomial interval for k successes in n trials; None if n == 0.
-    Bisection on the binomial tails (stdlib only; n is at most a few hundred here)."""
+    """Exact two-sided (1 - alpha) binomial interval for k successes in n trials; None if n == 0."""
     if n == 0:
         return None
+    from scipy.stats import beta  # already installed with the [ml] extra L2 needs
 
-    def below(m: int, p: float) -> float:  # P(X < m) for X ~ Binomial(n, p)
-        return sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(m))
-
-    def root(f) -> float:  # f increasing on [0, 1] with one sign change
-        lo, hi = 0.0, 1.0
-        for _ in range(60):
-            mid = (lo + hi) / 2
-            lo, hi = (mid, hi) if f(mid) < 0 else (lo, mid)
-        return (lo + hi) / 2
-    # low: P(X >= k) = alpha/2; high: P(X <= k) = alpha/2 (both monotone in p)
-    low = 0.0 if k == 0 else root(lambda p: (1 - below(k, p)) - alpha / 2)
-    high = 1.0 if k == n else root(lambda p: alpha / 2 - below(k + 1, p))
+    low = 0.0 if k == 0 else float(beta.ppf(alpha / 2, k, n - k + 1))
+    high = 1.0 if k == n else float(beta.ppf(1 - alpha / 2, k + 1, n - k))
     return [low, high]
 
 
