@@ -8,11 +8,14 @@ taken as the target. The model sees the claim sentence, the sentence before and 
 table row: its header rows and the next row) and the section heading, all as data blocks.
 
 Corrections are conservative: the pass may only null a metric or re-map it to another
-concept with the same unit, and null or re-map the target period. It never changes a value:
-a prose claim whose number the model reads at another scale loses its metric instead. Offline (llm.available() False) the pass is a no-op.
+concept with the same unit (for a comparison: the same unit as the concept it re-maps), and
+null or re-map the target period. It never changes a value: a prose claim whose number the
+model reads at another scale loses its metric instead. Offline (llm.available() False) the
+pass is a no-op.
 
-Answers are cached in <data_dir>/extract_llm_cache.json keyed by a hash of the whole prompt
-(span, context, the rules' reading), so a re-run repeats no call.
+Answers are cached in <data_dir>/extract_llm_cache.json keyed by a hash of the model, the
+answer schema and the whole prompt (span, context, the rules' reading), so a re-run repeats no
+call.
 """
 
 import hashlib
@@ -20,12 +23,13 @@ import json
 import logging
 import math
 import os
-import subprocess
+import tempfile
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ledgerline import llm
 from ledgerline.concepts import CONCEPTS
@@ -35,6 +39,7 @@ from ledgerline.schemas import ClaimDraft, FiscalPeriod, Unit
 
 log = logging.getLogger(__name__)
 WORKERS = 4  # concurrent CLI calls; more mostly buys rate-limit retries
+BATCH = 16  # answers per on_progress call
 _YEAR_SLACK = 2  # a target period more than this many years from the source is a misread
 
 
@@ -84,10 +89,18 @@ _cache: dict[str, dict] | None = None
 
 
 def _load() -> dict[str, dict]:
+    """Callers hold _lock. A corrupt cache is only lost answers: it loads as empty."""
     global _cache
     if _cache is None:
         p = _cache_path()
-        _cache = json.loads(p.read_text()) if p.exists() else {}
+        try:
+            _cache = json.loads(p.read_text()) if p.exists() else {}
+        except (OSError, ValueError) as e:
+            log.warning("ignoring unreadable normalization cache %s: %s", p, e)
+            _cache = {}
+        if not isinstance(_cache, dict):
+            log.warning("ignoring malformed normalization cache %s", p)
+            _cache = {}
     return _cache
 
 
@@ -96,10 +109,18 @@ def _save() -> None:
     # entries (only a re-ask later). A lock file or sqlite if that ever matters.
     p = _cache_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
     with _lock:
-        tmp.write_text(json.dumps(_cache, sort_keys=True))
-    os.replace(tmp, p)
+        if _cache is None:
+            return
+        blob = json.dumps(_cache, sort_keys=True)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(blob)
+        os.replace(tmp, p)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 def context(text: str, d: ClaimDraft, fy: int, fp: str, fye: str | None) -> dict[str, str]:
@@ -117,6 +138,8 @@ def context(text: str, d: ClaimDraft, fy: int, fp: str, fye: str | None) -> dict
             if " | " in prev:
                 if not any(_has_value(c) for c in prev.split(" | ")[1:]):
                     head.insert(0, prev)
+                elif head:
+                    break  # a value row above the header: the previous table
             elif not _label_row(prev) and prev.strip():
                 if len(prev) >= 120 or titles == 2:
                     break
@@ -150,26 +173,34 @@ def _instruction(d: ClaimDraft, fy: int, fp: str, fye: str | None) -> str:
             "Confirm or correct each field of the schema for that number.")
 
 
-def _ask(d: ClaimDraft, data: dict[str, str], instruction: str) -> Normalized:
-    # ponytail: the key omits the model name; delete the cache file when TIERS["fast"] changes.
-    key = hashlib.sha256(json.dumps([SYSTEM, data, instruction]).encode()).hexdigest()
+_SCHEMA = Normalized.model_json_schema()
+
+
+def _ask(d: ClaimDraft, data: dict[str, str], instruction: str) -> tuple[Normalized, llm.Usage]:
+    """The model's answer and what it cost (nothing for a cache hit). An unreachable model
+    (llm.LLMUnavailable) propagates: that fails the document as infrastructure."""
+    key = hashlib.sha256(json.dumps([llm.TIERS["fast"], _SCHEMA, SYSTEM, data, instruction],
+                                    sort_keys=True).encode()).hexdigest()
     with _lock:
         hit = _load().get(key)
     if hit is not None:
-        return Normalized.model_validate(hit)
+        try:
+            return Normalized.model_validate(hit), llm.OFFLINE
+        except ValidationError:
+            log.warning("re-asking a cached normalization that no longer validates")
     for attempt in (1, 2):
         try:
-            out, _ = llm.structured("fast", SYSTEM, data, instruction, Normalized, max_tokens=500)
+            out, usage = llm.structured("fast", SYSTEM, data, instruction, Normalized, max_tokens=500)
             break
-        except (ValueError, subprocess.TimeoutExpired) as e:  # refusal, invalid output, CLI failure
+        except ValueError as e:  # refusal or invalid output
             log.warning("normalization attempt %d failed for %r: %s", attempt, d.text[:60], e)
     else:
-        # No silently unrefined claim under this EXTRACTOR_VERSION: the document fails and a
-        # re-run retries it, with every answer already obtained served from the cache.
-        raise ValueError(f"LLM normalization failed twice for {d.text[:60]!r}")
+        # No silently unrefined claim under the LLM extractor version: the document fails and
+        # a re-run retries it, with every answer already obtained served from the cache.
+        raise ValueError("LLM normalization failed twice for a claim")
     with _lock:
         _cache[key] = out.model_dump()
-    return out
+    return out, usage
 
 
 def _rescaled(ours: float | None, theirs: float | None) -> bool:
@@ -188,7 +219,10 @@ def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str) -> ClaimDraft:
     upd: dict = {}
     if d.metric is not None:
         metric = r.metric if r.is_company_total and r.is_gaap else None
-        if metric is not None and d.comparison is None and CONCEPTS[metric].unit != d.unit:
+        # A comparison's unit is its change's (percent); its concept's unit is the one to keep:
+        # "gross margin expanded 120 bps" is not gross_profit growth.
+        unit = d.unit if d.comparison is None else CONCEPTS[d.metric].unit
+        if metric is not None and CONCEPTS[metric].unit != unit:
             metric = None
         # The model reads the number at another scale ("$9.2" in a billions context): not ours
         # to fix, not safe to keep. Table rows are exempt: the rules only read a table whose
@@ -207,20 +241,35 @@ def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str) -> ClaimDraft:
     return d.model_copy(update=upd) if upd else d
 
 
-def refine(text: str, drafts: list[ClaimDraft], fy: int, fp: str, fye: str | None) -> list[ClaimDraft]:
-    """The drafts with the model's corrections applied; unchanged when no model is available."""
+def refine(text: str, drafts: list[ClaimDraft], fy: int, fp: str, fye: str | None,
+           on_progress: Callable[[llm.Usage], None] | None = None,
+           ) -> tuple[list[ClaimDraft], llm.Usage]:
+    """The drafts with the model's corrections applied, and the model usage they cost;
+    unchanged (and free) when no model is available. on_progress, if given, is called on the
+    caller's thread with each batch's usage as every BATCH answers (and the last) come in."""
     todo = [i for i, d in enumerate(drafts) if d.metric is not None or d.value is not None]
     if not todo or not llm.available():
-        return drafts
+        return drafts, llm.OFFLINE
     # Contexts are built here, on the caller's thread; only the model calls run in the pool.
     asks = [(drafts[i], context(text, drafts[i], fy, fp, fye), _instruction(drafts[i], fy, fp, fye))
             for i in todo]
+    answers: list[Normalized] = []
+    total = batch = llm.OFFLINE
     try:
         with ThreadPoolExecutor(WORKERS) as pool:
-            answers = list(pool.map(lambda a: _ask(*a), asks))
+            try:
+                for n, (r, u) in enumerate(pool.map(lambda a: _ask(*a), asks), 1):
+                    answers.append(r)
+                    total, batch = total + u, batch + u
+                    if on_progress and (n % BATCH == 0 or n == len(asks)):
+                        on_progress(batch)
+                        batch = llm.OFFLINE
+            except BaseException:
+                pool.shutdown(cancel_futures=True)  # the document fails: ask nothing more
+                raise
     finally:
         _save()  # keep the answers obtained even when one call failed
     out = list(drafts)
     for i, r in zip(todo, answers, strict=True):
         out[i] = apply(drafts[i], r, fy, fp)
-    return out
+    return out, total

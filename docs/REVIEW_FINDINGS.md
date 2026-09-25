@@ -100,16 +100,16 @@ Every item below is to be fixed. Group letters = fix owner. Mark each `[x]` when
 # Round 3 — whole-app panel on the online system (2026-09-25): reality-checker, code-reviewer, security, api-tester, test-results-analyzer, performance-benchmarker
 
 ## J. LLM backend + extraction (`llm.py`, `tracing.py`, `extract/**`, tests)
-- [ ] J1 CLI isolation: add `--no-session-persistence --setting-sources "" --disable-slash-commands` (verified with the installed CLI 2.1.281: a call with these left no ~/.claude/projects folder) and run the child with an allowlisted env (HOME, PATH, USER, TMPDIR, LANG only — no DB URL, API keys); test that argv carries the flags and never the prompt, and the cwd is a fresh temp dir.
-- [ ] J2 Infrastructure errors: CLI auth/logged-out errors, subprocess.TimeoutExpired (after retries), and SDK RateLimitError/APIConnectionError/APITimeoutError raise an infra error (`llm.RateLimited` or a sibling `LLMUnavailable`), never a per-claim ValueError. Transient detection must not match bare "429"/"529" inside unrelated text (match HTTP status / known phrases). `out['result']` may be null.
-- [ ] J3 No model output or raw stderr in exception messages that reach the public API: wrap pydantic ValidationError in a fixed-message ValueError; stderr to the log.
-- [ ] J4 refine: comparison claims may only be re-mapped to a concept with the same unit (blocker: "gross margin expanded 120 bps" -> gross_profit growth). Test with that input.
-- [ ] J5 refine runs after `_finish` dedupe and role filtering (no calls for dropped duplicates/analyst turns; no divergence between restatements).
-- [ ] J6 refine table context stops scanning upward at a value row once a header is collected (no header rows from a previous table).
-- [ ] J7 refine cache: unique temp file (mkstemp) + os.replace; a corrupt/unparseable cache loads as empty with a warning; key includes model id and Normalized schema; a cached entry that no longer validates is re-asked.
-- [ ] J8 refine returns its llm.Usage total so the caller can count it (the pipeline adds it to report cost, group K).
-- [ ] J9 EXTRACTOR_VERSION by mode: "s4-llm-1" only when the LLM pass ran; offline extraction writes the rules version, so claims are re-extracted when credentials appear.
-- [ ] J10 Heartbeat hook: `extract_for_filing(..., on_progress=None)` calls it per completed batch of refine calls, so the pipeline can refresh the report heartbeat during long LLM extraction.
+- [x] J1 CLI isolation: add `--no-session-persistence --setting-sources "" --disable-slash-commands` (verified with the installed CLI 2.1.281: a call with these left no ~/.claude/projects folder) and run the child with an allowlisted env (HOME, PATH, USER, TMPDIR, LANG only — no DB URL, API keys); test that argv carries the flags and never the prompt, and the cwd is a fresh temp dir.
+- [x] J2 Infrastructure errors: CLI auth/logged-out errors, subprocess.TimeoutExpired (after retries), and SDK RateLimitError/APIConnectionError/APITimeoutError raise an infra error (`llm.RateLimited` or a sibling `LLMUnavailable`), never a per-claim ValueError. Transient detection must not match bare "429"/"529" inside unrelated text (match HTTP status / known phrases). `out['result']` may be null.
+- [x] J3 No model output or raw stderr in exception messages that reach the public API: wrap pydantic ValidationError in a fixed-message ValueError; stderr to the log.
+- [x] J4 refine: comparison claims may only be re-mapped to a concept with the same unit (blocker: "gross margin expanded 120 bps" -> gross_profit growth). Test with that input.
+- [x] J5 refine runs after `_finish` dedupe and role filtering (no calls for dropped duplicates/analyst turns; no divergence between restatements).
+- [x] J6 refine table context stops scanning upward at a value row once a header is collected (no header rows from a previous table).
+- [x] J7 refine cache: unique temp file (mkstemp) + os.replace; a corrupt/unparseable cache loads as empty with a warning; key includes model id and Normalized schema; a cached entry that no longer validates is re-asked.
+- [x] J8 refine returns its llm.Usage total so the caller can count it (the pipeline adds it to report cost, group K).
+- [x] J9 EXTRACTOR_VERSION by mode: "s4-llm-1" only when the LLM pass ran; offline extraction writes the rules version, so claims are re-extracted when credentials appear.
+- [x] J10 Heartbeat hook: `extract_for_filing(..., on_progress=None)` calls it per completed batch of refine calls, so the pipeline can refresh the report heartbeat during long LLM extraction.
 
 ## K. Platform (`pipeline.py`, `worker.py`, `api/**`, `report/**`, `db.py`, `models.py` + migration 0005, tests)
 - [ ] K1 int4 bounds: `claim_id` path param and claim cursor ids bounded to 1..2**31-1 -> 422, never a 500 (test 2147483648 and "9"*36).

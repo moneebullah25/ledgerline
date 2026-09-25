@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from ledgerline.extract.pipeline import EXTRACTOR_VERSION, extract_for_filing, link_across_quarters
+from ledgerline.extract.pipeline import (
+    RULES_VERSION,
+    extract_for_filing,
+    extractor_version,
+    link_across_quarters,
+)
 from ledgerline.models import Claim, Company, Filing
 
 FIX = Path(__file__).parent / "fixtures"
@@ -38,7 +43,7 @@ def test_extract_for_filing_is_idempotent(db, monkeypatch):
     assert extract_for_filing(db, f.id, use_ner=False) == 0  # unique span constraint
     rows = db.scalars(select(Claim).where(Claim.filing_id == f.id)).all()
     assert len(rows) == n
-    assert all(r.speaker_role == "executive" and r.extractor_version == EXTRACTOR_VERSION
+    assert all(r.speaker_role == "executive" and r.extractor_version == RULES_VERSION
                and (r.fiscal_year, r.fiscal_period) == (2027, "Q2") for r in rows)
     assert all(text[r.span_start:r.span_end] == r.text for r in rows)
 
@@ -47,7 +52,7 @@ def test_link_guidance_to_later_actual(db):
     c = _company(db)
     q1 = _filing(db, c, "a1", 2027, "Q1")
     q2 = _filing(db, c, "a2", 2027, "Q2")
-    common = {"company_id": c.id, "text": "x", "extractor_version": EXTRACTOR_VERSION, "unit": "USD"}
+    common = {"company_id": c.id, "text": "x", "extractor_version": extractor_version(), "unit": "USD"}
 
     def add(f, start, **kw):
         row = Claim(fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period, filing_id=f.id,

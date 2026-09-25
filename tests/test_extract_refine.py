@@ -42,24 +42,24 @@ def stub(monkeypatch, tmp_path):
     monkeypatch.setattr(refine, "_cache_path", lambda: tmp_path / "cache.json")
     monkeypatch.setattr(refine, "_cache", None)
 
-    def install(answer):
+    def install(answer, usage=llm.OFFLINE):
         monkeypatch.setattr(llm, "available", lambda: True)
         def structured(tier, system, data, instruction, schema, max_tokens=4000):
             calls.append(data)
-            return answer(data, instruction), llm.OFFLINE
+            return answer(data, instruction), usage
         monkeypatch.setattr(llm, "structured", structured)
         return calls
     return install
 
 
-def run(text=TEXT):
-    return extract_claims(text, fiscal_year=2026, fiscal_period="Q1", use_ner=False)
+def run(text=TEXT, **kw):
+    return extract_claims(text, fiscal_year=2026, fiscal_period="Q1", use_ner=False, **kw)
 
 
 def test_offline_is_a_no_op():
     assert not llm.available()
     d = draft()
-    assert refine.refine(TEXT, [d], 2026, "Q1", None) == [d]
+    assert refine.refine(TEXT, [d], 2026, "Q1", None) == ([d], llm.OFFLINE)
 
 
 def test_segment_revenue_loses_its_metric_but_keeps_its_value(stub):
@@ -91,6 +91,72 @@ def test_table_row_context_carries_the_header_rows(stub):
                                       "GAAP | Non-GAAP\n2025 | 2024 | vs. 2024")
     assert ctx["sentence_after"].startswith("Tax rate")
     assert ctx["section_heading"] == "(In millions)"  # the nearest heading-like line
+
+
+def test_table_row_context_stops_at_the_previous_table():
+    text = ("Old | 2024\nCash | 5 | 6\nSummary\nQ1 2026 | Q1 2025\nRevenue | 52,900 | 53,100\n")
+    d = draft(text="Revenue | 52,900", span_start=text.index("Revenue"), span_end=text.index("Revenue") + 16)
+    assert refine.context(text, d, 2026, "Q1", None)["sentence_before"] == "Summary\nQ1 2026 | Q1 2025"
+
+
+def test_comparison_keeps_its_concepts_unit(stub):
+    """Blocker: a margin change re-mapped to gross_profit growth would be scored as a dollar fact."""
+    stub(lambda data, ins: echo(ins, metric="gross_profit"))
+    got = {(c.claim_type, c.metric, c.value) for c in run("Gross margin expanded 120 basis points.")}
+    assert got == {("qualitative", None, 1.2)}
+
+
+def test_refine_after_dedupe_and_roles(stub):
+    calls = stub(lambda data, ins: echo(ins))
+    exec_ = "Revenue was $20.0 billion. "
+    text = exec_ + "Revenue was $20.0 billion. " + "Did revenue reach $30.0 billion?"
+    roles = [(0, 27, "executive"), (27, 54, "executive"), (54, len(text), "analyst")]
+    got = run(text, speaker_roles=roles)
+    assert [(c.value, c.speaker_role) for c in got] == [(20e9, "executive")]
+    assert len(calls) == 1  # no call for the restatement or the analyst's number
+
+
+def test_usage_total_and_progress_batches(stub, monkeypatch):
+    one = llm.Usage(model="claude-haiku-4-5", input_tokens=10, cache_write_tokens=2)
+    stub(lambda data, ins: echo(ins), usage=one)
+    monkeypatch.setattr(refine, "BATCH", 2)
+    drafts = [draft(text=f"span {i}", span_start=i, span_end=i + 1) for i in range(5)]
+    seen = []
+    out, total = refine.refine("x" * 10, drafts, 2026, "Q1", None, seen.append)
+    assert len(out) == 5
+    assert (total.model, total.input_tokens, total.cache_write_tokens) == ("claude-haiku-4-5", 50, 10)
+    assert [u.input_tokens for u in seen] == [20, 20, 10]  # every BATCH answers, then the rest
+    _, cached = refine.refine("x" * 10, drafts, 2026, "Q1", None)
+    assert cached == llm.OFFLINE  # cache hits cost nothing
+
+
+def test_cache_survives_corruption_and_schema_drift(stub, tmp_path):
+    calls = stub(lambda data, ins: echo(ins))
+    (tmp_path / "cache.json").write_text("{not json")
+    first = run()
+    n = len(calls)
+    assert n and json.loads((tmp_path / "cache.json").read_text())  # rewritten, valid
+    assert not list(tmp_path.glob("*.tmp"))
+    refine._cache = {k: {"metric": "no-such-metric"} for k in refine._cache}  # no longer validates
+    assert run() == first and len(calls) == 2 * n  # re-asked, not crashed
+
+
+def test_cache_key_includes_the_model(stub, monkeypatch):
+    calls = stub(lambda data, ins: echo(ins))
+    run()
+    n = len(calls)
+    monkeypatch.setitem(llm.TIERS, "fast", "claude-haiku-9")
+    run()
+    assert len(calls) == 2 * n
+
+
+def test_unreachable_model_fails_the_document_at_once(stub):
+    def down(data, instruction):
+        raise llm.LLMUnavailable("down")
+    calls = stub(down)
+    with pytest.raises(llm.LLMUnavailable):
+        refine.refine("x" * 50, [draft(text=f"s{i}", span_start=i, span_end=i + 1) for i in range(40)], 2026, "Q1", None)
+    assert len(calls) < 40  # not retried per claim; queued calls are cancelled
 
 
 def test_answers_are_cached_and_a_failed_call_fails_the_document(stub):

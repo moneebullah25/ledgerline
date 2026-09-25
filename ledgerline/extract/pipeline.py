@@ -22,12 +22,14 @@ So are trailing-twelve-month and year-to-date values, which have no fiscal perio
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from ledgerline import llm
 from ledgerline.concepts import CONCEPTS
 from ledgerline.extract.normalize import (
     NON_GAAP,
@@ -46,7 +48,18 @@ from ledgerline.extract.normalize import (
 from ledgerline.models import CallAudio, Claim, Company, Filing, Segment
 from ledgerline.schemas import ClaimDraft
 
+# Rows record which pass produced them: rules plus the LLM normalization pass, or rules alone
+# (offline). Callers look up claims at extractor_version(), so claims extracted offline are
+# re-extracted once credentials appear.
 EXTRACTOR_VERSION = "s4-llm-1"
+RULES_VERSION = "s4-rules-1"
+
+
+def extractor_version() -> str:
+    """The version extraction writes now: the LLM pass runs exactly when llm.available()."""
+    return EXTRACTOR_VERSION if llm.available() else RULES_VERSION
+
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------- cues
@@ -625,22 +638,28 @@ def _table_claims(line: str, base: int, t: _Table) -> list[ClaimDraft]:
 
 def extract_claims(text: str, *, fiscal_year: int, fiscal_period: str,
                    speaker_roles: list[tuple[int, int, str]] | None = None,
-                   fiscal_year_end: str | None = None, use_ner: bool = True) -> list[ClaimDraft]:
+                   fiscal_year_end: str | None = None, use_ner: bool = True,
+                   on_progress: Callable[[llm.Usage], None] | None = None) -> list[ClaimDraft]:
     """All claims in `text`, which is a release (load_text) or a concatenated transcript.
 
     fiscal_year/fiscal_period: the quarter the document reports. fiscal_year_end (MMDD,
     company.fiscal_year_end) resolves "December quarter" and "quarter ended <date>".
     speaker_roles: (char_start, char_end, role); analyst and operator turns are skipped.
     Claims whose metric is outside CONCEPTS are returned as "qualitative" (see module doc).
+    on_progress: called with the LLM pass's usage per batch of answers (refine.refine).
+
+    Dedupe and role filtering run before the LLM pass, so no call is spent on a restatement or
+    an analyst turn, and again after it, for claims the pass made identical.
     """
     from ledgerline.extract.refine import refine
 
-    cands = refine(text, _demote_partial_revenue(extract_candidates(
+    cands = _finish(_demote_partial_revenue(extract_candidates(
         text, fiscal_year=fiscal_year, fiscal_period=fiscal_period, fiscal_year_end=fiscal_year_end,
-        use_ner=use_ner)), fiscal_year, fiscal_period, fiscal_year_end)
+        use_ner=use_ner)), speaker_roles)
+    cands, _ = refine(text, cands, fiscal_year, fiscal_period, fiscal_year_end, on_progress)
     return _finish([d if d.metric or d.claim_type == "qualitative"
                     else d.model_copy(update={"claim_type": "qualitative", "comparison": None})
-                    for d in cands], speaker_roles)
+                    for d in cands], None)
 
 
 def extract_candidates(text: str, *, fiscal_year: int, fiscal_period: str,
@@ -746,8 +765,8 @@ def _write(s: Session, rows: list[dict]) -> int:
     return len(res.all())
 
 
-def _row(d: ClaimDraft, **src) -> dict:
-    return d.model_dump() | src | {"extractor_version": EXTRACTOR_VERSION}
+def _row(d: ClaimDraft, version: str, **src) -> dict:
+    return d.model_dump() | src | {"extractor_version": version}
 
 
 _RESULTS = re.compile(r"\b(?:report(?:s|ed|ing)?|announce[sd]?)\b[^.\n]{0,80}\bresults\b", re.IGNORECASE)
@@ -761,8 +780,10 @@ def is_earnings_release(text: str) -> bool:
     return money >= 10 and bool(_RESULTS.search(text[:3000]))
 
 
-def extract_for_filing(s: Session, filing_id: int, use_ner: bool = True) -> int:
-    """Claims from an 8-K EX-99.1 release; returns rows inserted (0 on a re-run)."""
+def extract_for_filing(s: Session, filing_id: int, use_ner: bool = True,
+                       on_progress: Callable[[llm.Usage], None] | None = None) -> int:
+    """Claims from an 8-K EX-99.1 release; returns rows inserted (0 on a re-run).
+    on_progress: see extract_claims (a heartbeat and cost hook for long LLM passes)."""
     from ledgerline.ingest.documents import load_text
 
     f = s.get(Filing, filing_id)
@@ -773,16 +794,20 @@ def extract_for_filing(s: Session, filing_id: int, use_ner: bool = True) -> int:
     if not is_earnings_release(text):
         log.warning("filing %s is not an earnings release (no results content): nothing extracted", filing_id)
         return 0
+    version = extractor_version()
     drafts = extract_claims(text, fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period,
-                            fiscal_year_end=company.fiscal_year_end, use_ner=use_ner)
-    return _write(s, [_row(d, speaker_role="executive", company_id=f.company_id,
+                            fiscal_year_end=company.fiscal_year_end, use_ner=use_ner,
+                            on_progress=on_progress)
+    return _write(s, [_row(d, version, speaker_role="executive", company_id=f.company_id,
                            fiscal_year=f.fiscal_year, fiscal_period=f.fiscal_period,
                            filing_id=f.id, segment_id=None) for d in drafts])
 
 
-def extract_for_call(s: Session, call_audio_id: int, use_ner: bool = True) -> int:
+def extract_for_call(s: Session, call_audio_id: int, use_ner: bool = True,
+                     on_progress: Callable[[llm.Usage], None] | None = None) -> int:
     """Claims from a transcribed call. Spans are stored relative to the segment's own text,
-    which is what audio.pipeline.locate() takes to recover the timestamps."""
+    which is what audio.pipeline.locate() takes to recover the timestamps.
+    on_progress: see extract_claims."""
     from ledgerline.audio.pipeline import segment_text
 
     call = s.get(CallAudio, call_audio_id)
@@ -792,15 +817,17 @@ def extract_for_call(s: Session, call_audio_id: int, use_ner: bool = True) -> in
     role_of = dict(s.execute(select(Segment.id, Segment.role)
                              .where(Segment.call_audio_id == call_audio_id)).all())
     company = s.get(Company, call.company_id)
+    version = extractor_version()
     drafts = extract_claims(text, fiscal_year=call.fiscal_year, fiscal_period=call.fiscal_period,
                             speaker_roles=[(a, b, role_of[i]) for i, a, b in seg_map],
-                            fiscal_year_end=company.fiscal_year_end, use_ner=use_ner)
+                            fiscal_year_end=company.fiscal_year_end, use_ner=use_ner,
+                            on_progress=on_progress)
     rows = []
     for d in drafts:
         seg = next(((i, a) for i, a, b in seg_map if a <= d.span_start and d.span_end <= b), None)
         if seg is None:
             continue  # a span across two turns cannot be cited to one speaker
-        rows.append(_row(d, span_start=d.span_start - seg[1], span_end=d.span_end - seg[1],
+        rows.append(_row(d, version, span_start=d.span_start - seg[1], span_end=d.span_end - seg[1],
                          company_id=call.company_id, fiscal_year=call.fiscal_year,
                          fiscal_period=call.fiscal_period, filing_id=None, segment_id=seg[0]))
     return _write(s, rows)
@@ -814,14 +841,15 @@ def link_across_quarters(s: Session, company_id: int) -> int:
     must come from an earlier source quarter; the most recent such guidance wins (the last
     word management gave before the actual), then the lowest id. Returns claims linked.
     """
+    version = extractor_version()
     cols = (Claim.id, Claim.metric, Claim.target_fiscal_year, Claim.target_fiscal_period,
             Claim.comparison, Claim.fiscal_year, Claim.fiscal_period)
     base = select(*cols).where(Claim.company_id == company_id, Claim.metric.is_not(None),
                                Claim.target_fiscal_year.is_not(None),
-                               Claim.extractor_version == EXTRACTOR_VERSION)
+                               Claim.extractor_version == version)
     # Recompute from scratch so a re-run also clears links whose guidance no longer exists.
     s.execute(update(Claim).where(Claim.company_id == company_id,
-                                  Claim.extractor_version == EXTRACTOR_VERSION,
+                                  Claim.extractor_version == version,
                                   Claim.linked_claim_id.is_not(None)).values(linked_claim_id=None))
     guidance: dict[tuple, list] = {}
     for gid, metric, ty, tp, comp, fy, fp in s.execute(base.where(Claim.claim_type == "guidance")):

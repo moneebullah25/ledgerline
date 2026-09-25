@@ -1,7 +1,7 @@
 """Backfill: `python -m ledgerline.extract [--ticker NVDA] [--no-ner]`
 
 Extracts claims from every 8-K earnings release and every transcribed earnings call not
-yet extracted at EXTRACTOR_VERSION, then links guidance to later actuals per company.
+yet extracted at the current extractor_version(), then links guidance to later actuals per company.
 One transaction per document, so a failure loses only that document.
 """
 
@@ -12,9 +12,9 @@ from sqlalchemy import exists, select
 
 from ledgerline.db import session
 from ledgerline.extract.pipeline import (
-    EXTRACTOR_VERSION,
     extract_for_call,
     extract_for_filing,
+    extractor_version,
     link_across_quarters,
 )
 from ledgerline.models import CallAudio, Claim, Company, Filing, Segment
@@ -31,7 +31,7 @@ def main() -> None:
             Company.ticker == a.ticker if a.ticker else True)).all()
         filings = s.scalars(select(Filing.id).where(
             Filing.form_type == "8-K", Filing.company_id.in_(companies),
-            ~exists().where(Claim.filing_id == Filing.id, Claim.extractor_version == EXTRACTOR_VERSION),
+            ~exists().where(Claim.filing_id == Filing.id, Claim.extractor_version == extractor_version()),
         ).order_by(Filing.id)).all()
         calls = s.scalars(select(CallAudio.id).where(
             CallAudio.kind == "earnings_call", CallAudio.company_id.in_(companies),
