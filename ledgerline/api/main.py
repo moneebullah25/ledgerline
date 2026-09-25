@@ -13,13 +13,15 @@ import base64
 import hmac
 import uuid
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select, text, tuple_
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ledgerline.config import settings
@@ -28,8 +30,12 @@ from ledgerline.models import Claim, Company, EvalRun, Evidence, Report, Span, V
 from ledgerline.pipeline import FY_UNSUPPORTED
 from ledgerline.report.generate import ReportView, build_report
 
-MAX_QUEUED = 50  # backlog cap: beyond it POST answers 429 instead of growing the queue
+# Backlog cap: beyond it POST answers 429 instead of growing the queue.
+# ponytail: soft cap - the count is not under a lock shared across quarters, so concurrent POSTs
+# for different quarters can overshoot it by a few; a global advisory lock makes it hard.
+MAX_QUEUED = 50
 CURSOR_ID_MAX_LEN = 36  # a UUID; claim ids are far shorter
+INT4_MAX = 2**31 - 1  # claim.id is a Postgres integer
 
 app = FastAPI(title="Ledgerline", version="1.0.0")
 
@@ -43,6 +49,7 @@ def get_session() -> Iterator[Session]:
 
 DB = Annotated[Session, Depends(get_session)]
 Limit = Annotated[int, Query(ge=1, le=100)]
+ClaimId = Annotated[int, Path(ge=1, le=INT4_MAX)]
 
 
 class ORM(BaseModel):
@@ -50,6 +57,8 @@ class ORM(BaseModel):
 
 
 class ReportRequest(BaseModel):
+    model_config = ConfigDict(strict=True)  # "2025" is not a year, "yes" is not a bool
+
     ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Za-z.\-]+$")
     fiscal_year: int = Field(ge=2000, le=2100)
     fiscal_period: Literal["Q1", "Q2", "Q3", "Q4", "FY"]
@@ -61,6 +70,17 @@ class ReportRequest(BaseModel):
         if v == "FY":
             raise ValueError(FY_UNSUPPORTED)
         return v
+
+    @model_validator(mode="after")
+    def _not_future(self) -> "ReportRequest":
+        # Fiscal years run up to a year ahead of the calendar (FY Y can end as early as
+        # January of Y), so quarter n of FY Y cannot end before 3n months after 1 January Y-1.
+        # Only a quarter that cannot have ended yet is rejected.
+        n = int(self.fiscal_period[1])
+        earliest_end = date(self.fiscal_year - 1 + n // 4, 3 * n % 12 + 1, 1)
+        if earliest_end > datetime.now(UTC).date():
+            raise ValueError(f"FY{self.fiscal_year} {self.fiscal_period} has not ended yet")
+        return self
 
 
 class Job(BaseModel):
@@ -116,6 +136,7 @@ class EvidenceOut(ORM):
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int
+    cache_write_tokens: int
     cost_usd: float
     latency_ms: int
     trace_id: uuid.UUID
@@ -148,7 +169,7 @@ class SpanOut(ORM):
 
 class ClaimDetail(BaseModel):
     claim: ClaimOut
-    verdict: VerdictOut | None  # the most recent report's verdict
+    verdict: VerdictOut | None  # from the latest finished (done) report; None if none has one
     evidence: list[EvidenceOut]  # everything that verdict's run collected, critic included
     spans: list[SpanOut]  # the full trace behind the verdict
 
@@ -195,9 +216,13 @@ def _company(s: Session, ticker: str) -> Company:
     return company
 
 
-@app.get("/healthz")
-def healthz(s: DB) -> dict:
-    s.execute(text("SELECT 1"))
+@app.get("/healthz", response_model=None,
+         responses={503: {"description": "database unreachable"}})
+def healthz(s: DB) -> dict | JSONResponse:
+    try:
+        s.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        return JSONResponse({"status": "unavailable", "database": "unreachable"}, 503)
     return {"status": "ok"}
 
 
@@ -265,12 +290,15 @@ def list_reports(s: DB, limit: Limit = 20, cursor: str | None = None) -> Page[Re
 
 
 @app.get("/v1/claims/{claim_id}")
-def get_claim(claim_id: int, s: DB) -> ClaimDetail:
+def get_claim(claim_id: ClaimId, s: DB) -> ClaimDetail:
+    """The verdict, evidence and trace come from the latest `done` report that verified the
+    claim: a queued, running or failed report's partial output is never shown here."""
     claim = s.get(Claim, claim_id)
     if claim is None:
         raise HTTPException(404, "claim not found")
-    verdict = s.scalar(select(Verdict).where(Verdict.claim_id == claim_id)
-                       .order_by(Verdict.id.desc()).limit(1))
+    verdict = s.scalar(select(Verdict).join(Report).where(
+        Verdict.claim_id == claim_id, Report.status == "done",
+    ).order_by(Verdict.id.desc()).limit(1))
     evidence, spans = [], []
     if verdict is not None:
         evidence = s.scalars(select(Evidence).where(
@@ -293,7 +321,9 @@ def company_claims(ticker: str, s: DB, limit: Limit = 50,
     q = select(Claim).where(Claim.company_id == company.id)
     if cursor is not None:
         ts, id_ = _decode(cursor)
-        if not id_.isdigit():  # ASCII and bounded by _decode, so int() cannot blow up
+        # ASCII and length-bounded by _decode, so int() cannot blow up; the range check keeps
+        # it inside Postgres integer (else a DataError, a 500).
+        if not (id_.isdigit() and 1 <= int(id_) <= INT4_MAX):
             raise _invalid(("query", "cursor"), "invalid cursor", cursor)
         q = q.where(tuple_(Claim.created_at, Claim.id) < tuple_(ts, int(id_)))
     rows = s.scalars(q.order_by(Claim.created_at.desc(), Claim.id.desc()).limit(limit + 1)).all()
