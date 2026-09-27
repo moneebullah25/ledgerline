@@ -88,6 +88,8 @@ _LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss (?:per|from oper
                    re.IGNORECASE)
 _INCOME = re.compile(r"\b(?:income|earnings|profit)\b", re.IGNORECASE)
 _FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
+_WORDS = dict(enumerate("zero one two three four five six seven eight nine ten eleven twelve "
+                        "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()))
 # ponytail: cue words only; "revenue including acquisitions was $5B" also reads as a part.
 _PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charges?|effects?"
                           r"|contribut\w*)\b[^,;$%]*$", re.IGNORECASE)
@@ -112,6 +114,10 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
             if x and math.isclose(x * scale, abs(value), rel_tol=1e-6):
                 return 0.5 * 10 ** -len(tok.partition(".")[2]) * per * scale
     if unit == "percent" and value == 0 and _FLAT.search(text):
+        return 0.5
+    # "an increase of two percent": a spelled-out number prints whole units
+    if unit == "percent" and abs(value) in _WORDS and re.search(
+            rf"\b{_WORDS[abs(value)]}\b", text, re.IGNORECASE):
         return 0.5
     return 0.0
 

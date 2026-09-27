@@ -272,3 +272,11 @@ def test_floor_claim_accepts_anything_above():
     assert assess(claim, [F(402_836e6)]).stance == "supports"
     assert assess(claim, [F(380e9)]).stance == "contradicts"
     assert assess(C("revenue of $400 billion", 400e9), [F(402_836e6)]).stance == "contradicts"
+
+
+def test_spelled_out_percent_prints_whole_units():
+    # PG Q4 FY2025 (held-out h063): "two percent" against filed +1.7%
+    claim = C("net sales of $20.9 billion, an increase of two percent versus the prior year", 2.0,
+              unit="percent", claim_type="comparison", comparison="yoy")
+    assert assess(claim, [F(20_889e6), F(20_532e6, fy=2024)]).stance == "supports"
+    assert assess(claim, [F(20_889e6), F(20_889e6 / 1.03, fy=2024)]).stance == "contradicts"
