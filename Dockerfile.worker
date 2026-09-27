@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ponytail: CPU-only wheels; add CUDA extras if GPU inference is needed.
 # pip overwrites the CUDA torch that uv.lock resolved with the CPU-only variant.
 # Regenerating uv.lock with [tool.uv.sources] + UV_TORCH_BACKEND=cpu removes this step.
-RUN /app/.venv/bin/pip install --no-deps \
+RUN uv pip install --python /app/.venv --no-deps \
     --index-url https://download.pytorch.org/whl/cpu \
     torch torchvision torchaudio
 
