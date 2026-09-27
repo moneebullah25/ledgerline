@@ -44,3 +44,13 @@ evals:
 	$(RUN) python -m ledgerline.evals.l3
 	$(RUN) python -m ledgerline.evals.l4
 	$(RUN) python -m ledgerline.evals.gate
+
+# Prefect deployment — requires a running Prefect server (`prefect server start` in another terminal).
+# Creates the `ledgerline-process` work pool and deploys all five flows with their schedules.
+# After deploy, start a worker: `prefect worker start -p ledgerline-process -t process`
+deploy:
+	uv run prefect work-pool create ledgerline-process --type process --overwrite
+	uv run prefect deploy --all
+
+worker:
+	LEDGERLINE_REPO_ROOT=$(shell pwd) uv run prefect worker start -p ledgerline-process -t process

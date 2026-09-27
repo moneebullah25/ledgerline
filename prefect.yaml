@@ -1,0 +1,65 @@
+# Prefect 3 deployment manifest — `prefect deploy --all` or `prefect deploy <name>`
+# Run a local Prefect server first: `prefect server start`
+# Then deploy: `prefect deploy --all`
+# Then start a worker: `prefect worker start -p ledgerline-process -t process`
+#
+# Flows are in ledgerline/ingest/flows.py. Each runs in the same Python process
+# that executes the `prefect worker` command, so the worker must have the full
+# virtualenv on PATH (run `source .venv/bin/activate` or prefix with `uv run`).
+#
+# Schedule overview:
+#   ingest_edgar_filings  — daily at 07:00 UTC (SEC releases 8-Ks by ~06:30)
+#   ingest_xbrl_facts     — daily at 08:00 UTC (companyfacts lags by 1-2 days)
+#   ingest_market_data    — daily at 21:00 UTC (after US market close)
+#   ingest_call_audio     — no schedule (triggered manually per earnings call)
+#   ingest_fomc_eval_set  — no schedule (triggered manually after FOMC meetings)
+
+name: ledgerline
+
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      # Must be the repo root. The `make worker` target starts from $(PWD) which is the
+      # repo root; if you start the worker manually, cd to the repo root first.
+      directory: "{{ $LEDGERLINE_REPO_ROOT | default('.') }}"
+
+deployments:
+  - name: edgar-filings-daily
+    entrypoint: ledgerline/ingest/flows.py:ingest_edgar_filings
+    work_pool:
+      name: ledgerline-process
+      work_queue_name: default
+    schedules:
+      - cron: "0 7 * * *"
+        timezone: UTC
+    parameters:
+      quarters: 6
+
+  - name: xbrl-facts-daily
+    entrypoint: ledgerline/ingest/flows.py:ingest_xbrl_facts
+    work_pool:
+      name: ledgerline-process
+      work_queue_name: default
+    schedules:
+      - cron: "0 8 * * *"
+        timezone: UTC
+
+  - name: market-data-daily
+    entrypoint: ledgerline/ingest/flows.py:ingest_market_data
+    work_pool:
+      name: ledgerline-process
+      work_queue_name: default
+    schedules:
+      - cron: "0 21 * * *"
+        timezone: UTC
+
+  - name: call-audio-manual
+    entrypoint: ledgerline/ingest/flows.py:ingest_call_audio
+    work_pool:
+      name: ledgerline-process
+      work_queue_name: default
+
+  - name: fomc-eval-manual
+    entrypoint: ledgerline/ingest/flows.py:ingest_fomc_eval_set
+    work_pool:
+      name: ledgerline-process
+      work_queue_name: default
