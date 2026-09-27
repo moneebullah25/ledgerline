@@ -54,6 +54,7 @@ percent so the refusal can say so. Percent concepts are exempt: a margin 13 poin
 contradiction to rule on, not a misread scale.
 """
 
+import dataclasses
 import math
 import re
 from threading import Lock
@@ -166,7 +167,27 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, U
         return _insufficient("qoq comparison on a fiscal year has no base period"), OFFLINE
     with lock:
         facts = [get_xbrl_fact(s, ctx.cik, claim.metric, fy, fp) for fy, fp in ps]
+        if claim.metric == "eps_diluted" and len(ps) == 2:
+            facts = split_adjusted(facts, [get_xbrl_fact(s, ctx.cik, "net_income", fy, fp)
+                                           for fy, fp in ps])
     return assess(claim, facts), OFFLINE
+
+
+def split_adjusted(eps: list[Fact | None], ni: list[Fact | None]) -> list[Fact | None]:
+    """[cur, base] EPS with base restated to cur's share basis when a stock split lies between.
+
+    Each period's EPS is stored as first filed, so NVDA FY2025 Q2 ($0.67, after the 10:1
+    split) meets FY2024 Q2 ($2.48, before it): -73% for a quarter that grew 168%. Implied
+    diluted shares (net income / EPS) that jump by a whole factor n >= 2 mark the split;
+    buybacks and issuance move share counts by a few percent, never by 2x."""
+    if None in eps or None in ni or not all(f.value for f in (*eps, *ni)):
+        return eps
+    ratio = (ni[0].value / eps[0].value) / (ni[1].value / eps[1].value)
+    n = round(ratio if ratio >= 1 else 1 / ratio)
+    if n < 2 or not math.isclose(ratio if ratio >= 1 else 1 / ratio, n, rel_tol=0.03):
+        return eps
+    k = 1 / n if ratio >= 1 else n
+    return [eps[0], dataclasses.replace(eps[1], value=eps[1].value * k, derived=True)]
 
 
 def _insufficient(why: str, **payload) -> EvidenceItem:

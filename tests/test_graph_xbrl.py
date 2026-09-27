@@ -2,7 +2,8 @@ from datetime import date
 
 import pytest
 
-from ledgerline.graph.agents.xbrl_table import assess, mentions_value, periods, printed_half_ulp
+from ledgerline.graph.agents.xbrl_table import (assess, mentions_value, periods, printed_half_ulp,
+                                                split_adjusted)
 from ledgerline.models import Claim
 from ledgerline.store.xbrl_query import Fact
 
@@ -289,3 +290,20 @@ def test_eps_change_allows_for_cent_rounded_facts():
     eps = dict(concept="eps_diluted", unit="USD/share")
     assert assess(claim, [F(1.70, **eps), F(1.33, fy=2024, **eps)]).stance == "supports"
     assert assess(claim, [F(1.70, **eps), F(1.45, fy=2024, **eps)]).stance == "contradicts"
+
+
+def test_eps_change_across_a_stock_split_restates_the_base():
+    # NVDA FY2025 Q2 after the 10:1 split: $0.67 (NI 16,599M) vs FY2024 Q2 $2.48 (NI 6,188M)
+    eps = dict(concept="eps_diluted", unit="USD/share")
+    e = [F(0.67, **eps), F(2.48, fy=2024, **eps)]
+    ni = [F(16_599e6, concept="net_income"), F(6_188e6, fy=2024, concept="net_income")]
+    adj = split_adjusted(e, ni)
+    assert adj[1].value == pytest.approx(0.248) and adj[1].derived
+    claim = C("diluted EPS up 168%", 168.0, unit="percent", metric="eps_diluted",
+              claim_type="comparison", comparison="yoy")
+    assert assess(claim, e).stance == "contradicts"  # the bug: -73%
+    assert assess(claim, adj).stance == "supports"
+    # no split: buyback-sized share changes and missing facts leave the pair alone
+    same = [F(1.70, **eps), F(1.33, fy=2024, **eps)]
+    assert split_adjusted(same, [F(2.3e9, concept="net_income"), F(1.85e9, concept="net_income")]) == same
+    assert split_adjusted(same, [None, ni[1]]) == same
