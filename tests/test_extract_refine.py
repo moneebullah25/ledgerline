@@ -221,3 +221,19 @@ def test_apply_guards(d, r, want):
     got = apply(d, r, 2026, "Q1")
     assert (got.metric, got.target_fiscal_year, got.target_fiscal_period) == want
     assert (got.value, got.value_high, got.text) == (d.value, d.value_high, d.text)
+
+
+def test_heading_period_is_not_overridden():
+    # MCD Q4 2024 (held-out h054): the model moved a bullet under "Fourth quarter financial
+    # performance:" to FY; the heading names Q4 and the sentence names no period
+    d = draft(claim_type="comparison", comparison="yoy", metric="operating_income", value=2.0,
+              unit="percent", target_fiscal_year=2024, target_fiscal_period="Q4")
+    r = ok(metric="operating_income", value=2.0, unit="percent", target_fiscal_year=2024,
+           target_fiscal_period="FY")
+    blocks = {"sentence": "Consolidated operating income increased 2% (3% in constant currencies).",
+              "section_heading": "Fourth quarter financial performance:"}
+    assert apply(d, r, 2024, "Q4", blocks, "1231").target_fiscal_period == "Q4"
+    # a sentence that names its own period may still be corrected; so may an undated heading
+    dated = blocks | {"sentence": "Full year operating income increased 2%."}
+    assert apply(d, r, 2024, "Q4", dated, "1231").target_fiscal_period == "FY"
+    assert apply(d, r, 2024, "Q4", blocks | {"section_heading": ""}, "1231").target_fiscal_period == "FY"

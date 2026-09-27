@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ledgerline import llm
 from ledgerline.concepts import CONCEPTS
 from ledgerline.config import settings
+from ledgerline.extract.normalize import find_periods
 from ledgerline.extract.pipeline import _has_value, _heading_ctx, _key, _label_row, _sentences
 from ledgerline.schemas import ClaimDraft, FiscalPeriod, Unit
 
@@ -211,11 +212,15 @@ def _rescaled(ours: float | None, theirs: float | None) -> bool:
     return round(k) != 0 and abs(k - round(k)) < 0.01
 
 
-def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str) -> ClaimDraft:
+def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str, data: dict[str, str] | None = None,
+          fye: str | None = None) -> ClaimDraft:
     """The claim with the model's corrections that pass the guards. A metric may only be nulled
     or re-mapped to a concept carrying the claim's unit. A period may only be nulled or moved
     within _YEAR_SLACK years of the source, an actual never past the source quarter, and is
-    never filled in where the rules found none. The value never changes."""
+    never filled in where the rules found none; nor moved at all when the section heading
+    names the rules' period and the sentence names none ("Fourth quarter financial
+    performance:" over "operating income increased 2%" is Q4, not FY). The value never
+    changes. data: the context() blocks the model saw."""
     upd: dict = {}
     if d.metric is not None:
         metric = r.metric if r.is_company_total and r.is_gaap else None
@@ -234,7 +239,10 @@ def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str) -> ClaimDraft:
     target = (r.target_fiscal_year, r.target_fiscal_period) if r.target_fiscal_period else (None, None)
     # A period without a year is an incomplete reading, not a correction: leave the rules' one.
     complete = target[1] is None or target[0] is not None
-    if complete and d.target_fiscal_period is not None and target != (d.target_fiscal_year, d.target_fiscal_period) and (
+    h = _heading_ctx(data["section_heading"], fy, fp, fye) if data else None
+    heading_dated = (h is not None and not find_periods(data["sentence"])
+                     and h.period == (d.target_fiscal_year, d.target_fiscal_period))
+    if complete and not heading_dated and d.target_fiscal_period is not None and target != (d.target_fiscal_year, d.target_fiscal_period) and (
             target == (None, None) or (abs(target[0] - fy) <= _YEAR_SLACK
                                        and (d.claim_type == "guidance" or _key(*target) <= _key(fy, fp)))):
         upd |= {"target_fiscal_year": target[0], "target_fiscal_period": target[1]}
@@ -270,6 +278,6 @@ def refine(text: str, drafts: list[ClaimDraft], fy: int, fp: str, fye: str | Non
     finally:
         _save()  # keep the answers obtained even when one call failed
     out = list(drafts)
-    for i, r in zip(todo, answers, strict=True):
-        out[i] = apply(drafts[i], r, fy, fp)
+    for i, (_, data, _), r in zip(todo, asks, answers, strict=True):
+        out[i] = apply(drafts[i], r, fy, fp, data, fye)
     return out, total
