@@ -89,6 +89,21 @@ def test_post_caps_the_queue(client, db, monkeypatch):
 
 
 @pytest.mark.db
+def test_post_caps_pending_per_key(client, db, monkeypatch):
+    seed_report(db, n_claims=0)
+    monkeypatch.setattr(settings(), "max_pending_per_key", 1)
+    # One queued report now exists (status=done from seed_report — add a queued one).
+    db.add(Report(company_id=db.query(Company.id).scalar(), fiscal_year=2025,
+                  fiscal_period="Q1", status="queued"))
+    db.flush()
+    r = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
+                                         "fiscal_period": "Q2"})
+    assert r.status_code == 429
+    assert r.json()["detail"] == "too many pending reports"
+    assert r.headers["Retry-After"]
+
+
+@pytest.mark.db
 def test_post_requires_api_key(client, db, monkeypatch):
     seed_report(db, n_claims=0)
     body = {"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1"}

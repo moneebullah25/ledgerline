@@ -26,6 +26,9 @@ from sqlalchemy.orm import Session
 
 from ledgerline.config import settings
 from ledgerline.db import engine
+from ledgerline.logging import configure_logging
+
+configure_logging(settings())
 from ledgerline.models import Claim, Company, EvalRun, Evidence, Report, Span, Verdict
 from ledgerline.pipeline import FY_UNSUPPORTED
 from ledgerline.report.generate import ReportView, build_report
@@ -255,6 +258,11 @@ def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
         queued = s.scalar(select(func.count()).where(Report.status == "queued"))
         if queued >= MAX_QUEUED:
             raise HTTPException(429, f"{queued} reports already queued; retry later",
+                                headers={"Retry-After": "60"})
+        pending = s.scalar(select(func.count()).where(
+            Report.status.in_(("queued", "running"))))
+        if pending >= settings().max_pending_per_key:
+            raise HTTPException(429, "too many pending reports",
                                 headers={"Retry-After": "60"})
         report = Report(company_id=company.id, fiscal_year=body.fiscal_year,
                         fiscal_period=body.fiscal_period, status="queued")
