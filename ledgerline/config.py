@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     nli_model: str = "cross-encoder/nli-deberta-v3-small"
     ner_model: str = "urchade/gliner_small-v2.1"
     asr_model: str = "large-v3-turbo"
+    verify_workers: int = Field(4, ge=1)
 
     @field_validator("sec_user_agent")
     @classmethod

@@ -1,4 +1,3 @@
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import lru_cache
@@ -9,8 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from ledgerline.config import settings
 
 # Claims verified in parallel per report (pipeline.run_report), each on its own Session.
-# Read from the process environment (not .env, which only Settings reads).
-VERIFY_WORKERS = max(1, int(os.environ.get("LEDGERLINE_VERIFY_WORKERS", "4")))
+VERIFY_WORKERS = settings().verify_workers
 
 
 @lru_cache
