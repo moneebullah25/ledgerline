@@ -55,6 +55,7 @@ markers = [
     "ml: needs the [ml] extra and model downloads",
     "network: hits a real external API",
     "perf: wall-clock latency assertions (run with LEDGERLINE_PERF=1)",
+    "unit: pure unit test — no DB, network, or API key required",
 ]
 addopts = "-m 'not network and not perf'"
 
