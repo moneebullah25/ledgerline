@@ -25,7 +25,7 @@ services:
       db: {condition: service_healthy}
 
   worker:
-    build: {context: ., args: {EXTRAS: ml}}
+    build: {context: ., dockerfile: Dockerfile.worker}
     command: python -m ledgerline.worker
     env_file: .env
     environment:
