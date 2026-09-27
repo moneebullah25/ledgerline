@@ -3,8 +3,7 @@ import json
 import pytest
 
 from ledgerline import llm
-from ledgerline.evals import l3, l4
-from ledgerline.schemas import Citation, EvidenceItem
+from ledgerline.evals import golden, l3, l4
 
 
 def test_cohen_kappa_reference_values():
@@ -28,27 +27,8 @@ def test_annotator_agreement_only_counts_second_pass_items():
     assert m["pass2_disagreements"] == ["g2"]
 
 
-def test_offline_run_does_not_report_a_judge_kappa(monkeypatch):
-    monkeypatch.setattr(llm, "available", lambda: False)
-    metrics, details = l3.run()
-    assert metrics["judge_ran"] is False and metrics["judge_kappa"] is None
-    assert metrics["n_pass2"] > 0 and "not_measured" in details
 
 
-def test_judge_labels_each_claim_from_graph_evidence(monkeypatch):
-    seen = []
-
-    def fake(tier, system, data, instruction, schema):
-        seen.append((tier, data["claim"]))
-        return schema(label="contradicted", reason="r"), llm.Usage()
-
-    monkeypatch.setattr(llm, "structured", fake)
-    ev = EvidenceItem(agent="xbrl_table", stance="contradicts", summary="s",
-                      citations=[Citation(kind="xbrl_fact", ref_id=1, value=1.0, unit="USD")])
-    recs = [{"id": "g1", "claim": {"text": "Revenue was $1 billion"}}]
-    out = l3.judge(recs, {"g1": {"evidence": {"xbrl_table": ev}}})
-    assert out["g1"].label == "contradicted"
-    assert seen == [("judge", "Revenue was $1 billion")]
 
 
 def _row(ticker, release, flagged, missed, stance=None):
@@ -71,49 +51,61 @@ def test_backtest_summary_with_no_flags_is_undefined_not_zero():
     assert m["backtest_precision"] is None and m["n_forecast_decided"] == 0
 
 
-def test_judge_records_a_bad_output_per_claim_instead_of_aborting(monkeypatch):
-    def fake(tier, system, data, instruction, schema):
-        if data["claim"] == "bad":
-            raise ValueError("judge: output failed validation")
-        return schema(label="supported", reason="r"), llm.Usage()
-
-    monkeypatch.setattr(llm, "structured", fake)
-    recs = [{"id": "g1", "claim": {"text": "bad"}}, {"id": "g2", "claim": {"text": "ok"}}]
-    out = l3.judge(recs, {"g1": {"evidence": {}}, "g2": {"evidence": {}}})
-    assert out["g1"].startswith("ValueError") and out["g2"].label == "supported"
-
-    def limited(*_):
-        raise llm.RateLimited("judge: rate-limited")
-    monkeypatch.setattr(llm, "structured", limited)
-    with pytest.raises(llm.RateLimited):
-        l3.judge(recs[1:], {"g2": {"evidence": {}}})
-    with pytest.raises(ValueError):
-        l3.judge(recs, {}, workers=0)
+def test_main_exits_1_without_llm(monkeypatch, capsys):
+    monkeypatch.setattr(llm, "available", lambda: False)
+    with pytest.raises(SystemExit) as e:
+        l3.main(["--no-write"])
+    assert e.value.code == 1 and l3.NO_LLM in capsys.readouterr().err
+    with pytest.raises(RuntimeError):
+        l3.run()
 
 
-def test_run_skips_and_counts_claims_without_evidence(monkeypatch, tmp_path):
-    recs = [{"id": "g1", "gold": "supported", "claim": {"text": "a"}},
-            {"id": "g2", "gold": "contradicted", "claim": {"text": "b"}},
-            {"id": "g3", "gold": "supported", "claim": {"text": "c"}}]
+def test_kappa_ci_and_confusion_from_known_matrix():
+    # gold x pred: S->S 4, S->U 1, C->C 3, U->U 2 ; po = 0.9
+    gold = ["supported"] * 5 + ["contradicted"] * 3 + ["unverifiable"] * 2
+    pred = ["supported"] * 4 + ["unverifiable"] + ["contradicted"] * 3 + ["unverifiable"] * 2
+    # pe = (5*4 + 3*3 + 2*3) / 100 = 0.35 -> kappa = 0.55 / 0.65
+    assert l3.cohen_kappa(gold, pred) == pytest.approx(0.55 / 0.65)
+    m = l3.confusion(gold, pred)
+    assert m["supported"] == {"supported": 4, "contradicted": 0, "unverifiable": 1}
+    assert m["unverifiable"]["unverifiable"] == 2
+    lo, hi = l3.bootstrap_ci(gold, pred)
+    assert lo <= l3.cohen_kappa(gold, pred) <= hi <= 1.0
+    assert l3.bootstrap_ci(["a"], ["a"]) is None
+
+
+def test_cli_args():
+    a = l3.parse_args([])
+    assert (a.set_name, a.workers, a.evidence, a.no_write) == ("golden", 1, None, False)
+    a = l3.parse_args(["--set", "heldout", "--workers", "4", "--evidence", "e.json"])
+    assert (a.set_name, a.workers, a.evidence) == ("heldout", 4, "e.json")
+    for bad in (["--set", "nope"], ["--workers", "0"]):
+        with pytest.raises(SystemExit):
+            l3.parse_args(bad)
+
+
+def test_run_judges_only_needs_judgment_claims(monkeypatch, tmp_path):
+    claim = {k: None for k in golden.FIELDS} | {"claim_type": "reported_result"}
+    recs = [{"id": f"g{i}", "gold": g, "claim": claim | {"text": t}}
+            for i, (g, t) in enumerate([("supported", "a"), ("contradicted", "b"),
+                                        ("supported", "c"), ("supported", "d")])]
     monkeypatch.setattr(l3, "load", lambda path: recs)
     monkeypatch.setattr(llm, "available", lambda: True)
-    labels = {"a": "supported", "b": "contradicted"}
+    cite = [{"kind": "xbrl_fact", "ref_id": 1, "value": 1.0, "unit": "USD"}]
+    rag = {"agent": "filing_rag", "stance": "supports", "summary": "s", "citations": cite}
+    xbrl = {"agent": "xbrl_table", "stance": "supports", "summary": "s", "citations": cite}
+    path = tmp_path / "ev.json"  # g0, g1 need judgment; g2 is rule-decided; g3 has no evidence
+    path.write_text(json.dumps({"g0": {"filing_rag": rag}, "g1": {"filing_rag": rag},
+                                "g2": {"xbrl_table": xbrl}, "g3": {}}))
+    monkeypatch.setattr(l3.critic, "critique", lambda c, e: (None, llm.Usage()))
 
-    def fake(tier, system, data, instruction, schema):
-        if data["claim"] not in labels:
+    def fake(c, e, crit):
+        if c.text == "b":
             raise ValueError("bad output")
-        return schema(label=labels[data["claim"]], reason="r"), llm.Usage()
-    monkeypatch.setattr(llm, "structured", fake)
-    ev = {"agent": "xbrl_table", "stance": "insufficient", "summary": "s"}
-    # g1, g2 have evidence; g3 errored in L2 (empty evidence); an unmatched id is simply absent.
-    path = tmp_path / "ev.json"
-    path.write_text(json.dumps({"g1": {"xbrl_table": ev}, "g2": {"xbrl_table": ev}, "g3": {}}))
-    metrics, details = l3.run(str(path))
-    assert metrics["judge_n"] == 2 and metrics["judge_skipped_no_evidence"] == 1
-    assert metrics["judge_errors"] == 0 and metrics["judge_kappa"] == 1.0
-    assert details["skipped_no_evidence"] == ["g3"]
+        return type("V", (), {"label": "supported"}), llm.Usage(), "claude-opus-5"
+    monkeypatch.setattr(l3.adjudicator, "adjudicate", fake)
+    m, d = l3.run(str(path))
+    assert (m["n_total"], m["judge_n"], m["skipped_deterministic"], m["skipped_no_evidence"],
+            m["judge_errors"], m["adjudicator_fallbacks"]) == (4, 1, 1, 1, 1, 0)
+    assert list(d["judge_errors"]) == ["g1"] and d["skipped_no_evidence"] == ["g3"]
 
-    labels.pop("b")  # g2's judge output now fails validation: recorded, not fatal
-    metrics, details = l3.run(str(path))
-    assert metrics["judge_n"] == 1 and metrics["judge_errors"] == 1
-    assert list(details["judge_errors"]) == ["g2"]
