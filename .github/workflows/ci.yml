@@ -1,13 +1,27 @@
 name: ci
+
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
-  unit:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc  # v6.4.3
+        with: {enable-cache: true}
+      - run: uv sync --frozen
+      - run: uv run ruff check ledgerline/ tests/
+      - run: uv run ruff format --check ledgerline/ tests/
+
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -15,8 +29,7 @@ jobs:
       - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc  # v6.4.3
         with: {enable-cache: true}
       - run: uv sync --frozen   # no [ml] extra: model-backed tests are marked `ml`
-      - run: uv run ruff check .
-      - run: uv run pytest -m "not db and not ml and not network and not perf"
+      - run: uv run pytest tests/ -q --tb=short -m "not ml and not db and not perf and not network"
         env:
           LEDGERLINE_DATABASE_URL: postgresql+psycopg://unused@localhost/unused
 
@@ -42,4 +55,4 @@ jobs:
       - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc  # v6.4.3
         with: {enable-cache: true}
       - run: uv sync --frozen
-      - run: uv run pytest -m "db and not ml and not network and not perf"
+      - run: uv run pytest tests/ -q --tb=short -m "db and not ml and not network and not perf"
