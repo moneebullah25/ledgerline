@@ -239,8 +239,8 @@ def apply(d: ClaimDraft, r: Normalized, fy: int, fp: str, data: dict[str, str] |
     target = (r.target_fiscal_year, r.target_fiscal_period) if r.target_fiscal_period else (None, None)
     # A period without a year is an incomplete reading, not a correction: leave the rules' one.
     complete = target[1] is None or target[0] is not None
-    h = _heading_ctx(data["section_heading"], fy, fp, fye) if data else None
-    heading_dated = (h is not None and not find_periods(data["sentence"])
+    h = _heading_ctx(data.get("section_heading", ""), fy, fp, fye) if data else None
+    heading_dated = (h is not None and not find_periods(data.get("sentence", ""))
                      and h.period == (d.target_fiscal_year, d.target_fiscal_period))
     if complete and not heading_dated and d.target_fiscal_period is not None and target != (d.target_fiscal_year, d.target_fiscal_period) and (
             target == (None, None) or (abs(target[0] - fy) <= _YEAR_SLACK

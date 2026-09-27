@@ -98,7 +98,7 @@ _PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charge
 _PART_AFTER = re.compile(r"^\s*of\s+(?:\w+\s+){0,2}(?:earnings per share|eps)\b", re.IGNORECASE)
 _COMPANY_DEFINED = {"free_cash_flow"}
 # "revenues exceeded $400 billion", "grew more than 20%": a floor, not a point estimate.
-_FLOOR = re.compile(r"\b(?:exceed(?:ed|s|ing)?|more than|over|above|surpass(?:ed|es|ing)?|topp(?:ed|ing)"
+_FLOOR = re.compile(r"\b(?:exceed(?:ed|s|ing)?|more than|over|above|surpass(?:ed|es|ing)?|top(?:s|ped|ping)?"
                     r"|in excess of)\s*$", re.IGNORECASE)
 
 
@@ -118,8 +118,9 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
     if unit == "percent" and value == 0 and _FLAT.search(text):
         return 0.5
     # "an increase of two percent": a spelled-out number prints whole units
-    if unit == "percent" and abs(value) in _WORDS and re.search(
-            rf"\b{_WORDS[abs(value)]}\b", text, re.IGNORECASE):
+    _iv = round(abs(value))
+    if unit == "percent" and _iv in _WORDS and math.isclose(abs(value), _iv) and re.search(
+            rf"\b{_WORDS[_iv]}\b", text, re.IGNORECASE):
         return 0.5
     return 0.0
 
@@ -180,11 +181,12 @@ def split_adjusted(eps: list[Fact | None], ni: list[Fact | None]) -> list[Fact |
     split) meets FY2024 Q2 ($2.48, before it): -73% for a quarter that grew 168%. Implied
     diluted shares (net income / EPS) that jump by a whole factor n >= 2 mark the split;
     buybacks and issuance move share counts by a few percent, never by 2x."""
-    if None in eps or None in ni or not all(f.value for f in (*eps, *ni)):
+    if None in eps or None in ni or any(f.value == 0 for f in (*eps, *ni)):
         return eps
     ratio = (ni[0].value / eps[0].value) / (ni[1].value / eps[1].value)
-    n = round(ratio if ratio >= 1 else 1 / ratio)
-    if n < 2 or not math.isclose(ratio if ratio >= 1 else 1 / ratio, n, rel_tol=0.03):
+    r = max(ratio, 1 / ratio)
+    n = round(r)
+    if n < 2 or not math.isclose(r, n, rel_tol=0.03):
         return eps
     k = 1 / n if ratio >= 1 else n
     return [eps[0], dataclasses.replace(eps[1], value=eps[1].value * k, derived=True)]
