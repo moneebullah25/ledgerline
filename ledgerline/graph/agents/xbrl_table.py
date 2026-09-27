@@ -31,6 +31,9 @@ of $1B versus net income of $2B" signs only the $1B). A loss claim against a fil
 the reverse) is then a contradiction. A change claim on a loss with a negative base ("net loss
 widened 20%") compares magnitudes: -1.0 to -1.2 widened the loss by 20%.
 
+Floors: "revenues exceeded $400 billion" / "grew more than 20%" is consistent with any filed
+value above the printed one.
+
 Basis points: "up 120 basis points" is 1.20 points, printed to a hundredth of a point.
 
 Citations: every filed fact is cited with its own value and unit (a margin cites its USD
@@ -90,6 +93,9 @@ _PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charge
                           r"|contribut\w*)\b[^,;$%]*$", re.IGNORECASE)
 _PART_AFTER = re.compile(r"^\s*of\s+(?:\w+\s+){0,2}(?:earnings per share|eps)\b", re.IGNORECASE)
 _COMPANY_DEFINED = {"free_cash_flow"}
+# "revenues exceeded $400 billion", "grew more than 20%": a floor, not a point estimate.
+_FLOOR = re.compile(r"\b(?:exceed(?:ed|s|ing)?|more than|over|above|surpass(?:ed|es|ing)?|topp(?:ed|ing)"
+                    r"|in excess of)\s*$", re.IGNORECASE)
 
 
 def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
@@ -219,6 +225,9 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     loss = _loss_claim(claim)
     if claim.comparison is None and lo > 0 and loss:
         lo, hi = -hi, -lo
+    # A floor: anything above it is consistent; the tolerance still applies below it.
+    floor = lo >= 0 and not loss and any(_FLOOR.search(claim.text[:v.start])
+                                         for v in _claimed_spans(claim))
     half_ulp = max(printed_half_ulp(claim.text, lo, claim.unit),
                    printed_half_ulp(claim.text, hi, claim.unit))
     cur = facts[0]
@@ -229,7 +238,7 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     if len(facts) == 1:
         actual = cur.value
         tol = (PP_TOL if unit == "percent" else REL_TOL * abs(actual)) + half_ulp
-        nearest = min(max(actual, lo), hi)
+        nearest = min(max(actual, lo), math.inf if floor else hi)
         err = nearest - actual
         deviation = err / abs(actual) if actual else None
         what = f"filed {_label(cur)}"
@@ -249,7 +258,7 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
         else:  # an absolute change in the concept's unit
             actual = cur_v - base_v
             tol = REL_TOL * (abs(cur.value) + abs(base.value)) + half_ulp
-        nearest = min(max(actual, lo), hi)
+        nearest = min(max(actual, lo), math.inf if floor else hi)
         err = nearest - actual
         deviation = err / 100 if claim.unit == "percent" else (err / abs(actual) if actual else None)
         what = f"{claim.comparison} change from filed {_label(base)} to {_label(cur)}"

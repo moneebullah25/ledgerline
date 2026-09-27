@@ -264,3 +264,11 @@ def test_zero_filed_value_has_no_relative_deviation():
     ev = assess(C("net income of $1.0 billion", 1.0e9, metric="net_income"),
                 [F(0.0, concept="net_income")])
     assert ev.stance == "contradicts" and ev.payload["deviation"] is None
+
+
+def test_floor_claim_accepts_anything_above():
+    # GOOGL FY2025 (held-out h011): "revenues exceeded $400 billion" against 402,836M filed
+    claim = C("revenues exceeded $400 billion", 400e9, target_fiscal_period="FY")
+    assert assess(claim, [F(402_836e6)]).stance == "supports"
+    assert assess(claim, [F(380e9)]).stance == "contradicts"
+    assert assess(C("revenue of $400 billion", 400e9), [F(402_836e6)]).stance == "contradicts"
