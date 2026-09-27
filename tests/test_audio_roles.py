@@ -1,3 +1,6 @@
+import pytest
+
+pytest.importorskip("av")  # [ml] extra — skip entire file if not installed
 from ledgerline.audio.roles import assign_roles, qa_start, sections, seed_roles
 from ledgerline.ingest.fomc import parse_transcript
 

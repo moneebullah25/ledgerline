@@ -90,8 +90,7 @@ _LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss (?:per|from oper
                    re.IGNORECASE)
 _INCOME = re.compile(r"\b(?:income|earnings|profit)\b", re.IGNORECASE)
 _FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
-_WORDS = dict(enumerate("zero one two three four five six seven eight nine ten eleven twelve "
-                        "thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()))
+_WORDS = dict(enumerate(["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]))
 # ponytail: cue words only; "revenue including acquisitions was $5B" also reads as a part.
 _PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charges?|effects?"
                           r"|contribut\w*)\b[^,;$%]*$", re.IGNORECASE)

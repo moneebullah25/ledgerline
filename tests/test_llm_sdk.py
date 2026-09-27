@@ -7,7 +7,7 @@ extraction, and schema deserialization. Run with:
 """
 
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -162,7 +162,8 @@ def test_sdk_connection_error_raises_llm_unavailable(monkeypatch):
 @pytest.mark.unit
 def test_sdk_auth_status_error_raises_llm_unavailable(monkeypatch):
     """APIStatusError with 401/403 → LLMUnavailable (not re-raised as-is)."""
-    import anthropic, httpx
+    import anthropic
+    import httpx
     _sdk_monkeypatch(monkeypatch)
     resp = httpx.Response(401, request=httpx.Request("POST", "https://api.anthropic.com"))
     client = MagicMock()
@@ -178,7 +179,8 @@ def test_sdk_auth_status_error_raises_llm_unavailable(monkeypatch):
 @pytest.mark.unit
 def test_sdk_server_error_raises_llm_unavailable(monkeypatch):
     """APIStatusError with 5xx → LLMUnavailable."""
-    import anthropic, httpx
+    import anthropic
+    import httpx
     _sdk_monkeypatch(monkeypatch)
     resp = httpx.Response(503, request=httpx.Request("POST", "https://api.anthropic.com"))
     client = MagicMock()

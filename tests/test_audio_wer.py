@@ -1,3 +1,6 @@
+import pytest
+
+pytest.importorskip("jiwer")  # [ml] extra — skip entire file if not installed
 from ledgerline.evals.wer import _tokens, align, label_accuracy, normalize
 
 

@@ -42,8 +42,8 @@ from sqlalchemy.orm import Session
 from ledgerline import llm
 from ledgerline.config import settings
 from ledgerline.db import VERIFY_WORKERS
-from ledgerline.logging import configure_logging
 from ledgerline.llm import Usage
+from ledgerline.logging import configure_logging
 from ledgerline.models import CallAudio, Claim, Company, Evidence, Filing, Report, Segment, Verdict
 from ledgerline.report.generate import COST_BUDGET_USD, NO_VERDICT
 from ledgerline.report.severity import load_weights, severity
