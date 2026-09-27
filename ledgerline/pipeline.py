@@ -40,7 +40,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from ledgerline import llm
+from ledgerline.config import settings
 from ledgerline.db import VERIFY_WORKERS
+from ledgerline.logging import configure_logging
 from ledgerline.llm import Usage
 from ledgerline.models import CallAudio, Claim, Company, Evidence, Filing, Report, Segment, Verdict
 from ledgerline.report.generate import COST_BUDGET_USD, NO_VERDICT
@@ -273,13 +275,15 @@ def _verify_claims(s: Session, report: Report, claims: list[Claim]) -> None:
 def run_report(s: Session, report_id: uuid.UUID) -> None:
     """Runs to completion or marks the report failed; never leaves it 'running' unless the
     process itself dies (the worker's stale sweep covers that)."""
+    configure_logging(settings())  # idempotent; no-op if already configured
     report = s.get(Report, report_id)
     if report is None:
         raise ValueError(f"no report {report_id}")
     t0 = time.perf_counter()
     report.status = "running"
-    _heartbeat(s, report, started_at=datetime.now(UTC).isoformat(),
-               mode="online" if llm.available() else "offline")
+    mode = "online" if llm.available() else "offline"
+    log.info("report started", extra={"report_id": str(report_id), "mode": mode})
+    _heartbeat(s, report, started_at=datetime.now(UTC).isoformat(), mode=mode)
     s.commit()
     try:
         if report.fiscal_period == "FY":
@@ -289,8 +293,10 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
             raise LookupError(
                 f"no claims for FY{report.fiscal_year} {report.fiscal_period}: no 8-K earnings "
                 "release or call audio ingested for that quarter (run make backfill)")
+        log.info("verifying claims", extra={"report_id": str(report_id), "claim_count": len(claims)})
         _verify_claims(s, report, claims)  # imports the graph here: a broken one fails the report
         report.status, report.error = "done", None
+        log.info("report done", extra={"report_id": str(report_id)})
     except Exception as e:  # any failure must end as status='failed', not 'running'
         log.exception("report %s failed", report_id)  # the traceback stays server-side
         s.rollback()  # drops only the claim in flight; earlier claims are committed

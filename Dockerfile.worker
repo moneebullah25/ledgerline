@@ -16,9 +16,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra ml
 
 # ponytail: CPU-only wheels; add CUDA extras if GPU inference is needed.
-# pip overwrites the CUDA torch that uv.lock resolved with the CPU-only variant.
+# --force-reinstall overwrites the CUDA torch uv sync placed in .venv; without it
+# (or with --no-deps) the CUDA wheel stays and the image stays at ~11 GB.
 # Regenerating uv.lock with [tool.uv.sources] + UV_TORCH_BACKEND=cpu removes this step.
-RUN uv pip install --python /app/.venv --no-deps \
+RUN uv pip install --python /app/.venv --force-reinstall \
     --index-url https://download.pytorch.org/whl/cpu \
     torch torchvision torchaudio
 

@@ -121,6 +121,7 @@ def structured[T: BaseModel](
     Raises ValueError if the model refuses or the output does not validate, LLMUnavailable
     (RateLimited) if the model cannot be reached."""
     model = TIERS[tier]
+    log.info("llm call", extra={"model": model, "schema": schema.__name__})
     tag = f"document-{secrets.token_hex(8)}"
     docs = "\n".join(
         f'<{tag} label="{label}">\n{_neutralise(text)}\n</{tag}>' for label, text in data.items()

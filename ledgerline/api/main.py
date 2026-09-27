@@ -261,7 +261,7 @@ def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
                                 headers={"Retry-After": "60"})
         pending = s.scalar(select(func.count()).where(
             Report.status.in_(("queued", "running"))))
-        if pending >= settings().max_pending_per_key:
+        if pending >= settings().max_pending_reports:
             raise HTTPException(429, "too many pending reports",
                                 headers={"Retry-After": "60"})
         report = Report(company_id=company.id, fiscal_year=body.fiscal_year,

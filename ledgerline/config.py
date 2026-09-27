@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     ner_model: str = "urchade/gliner_small-v2.1"
     asr_model: str = "large-v3-turbo"
     verify_workers: int = Field(4, ge=1)
-    max_pending_per_key: int = Field(5, ge=1)
+    max_pending_reports: int = Field(5, ge=1)  # global; single-key API means this == per-key
     log_format: Literal["json", "text"] = "json"
 
     @field_validator("sec_user_agent")
