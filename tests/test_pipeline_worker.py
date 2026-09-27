@@ -13,15 +13,27 @@ def test_claim_next_takes_oldest_queued_and_sweep_recovers_stale(db):
     db.flush()
     old = datetime.now(UTC) - STALE_AFTER - timedelta(minutes=1)
     now = datetime.now(UTC)
-    first = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q1",
-                   created_at=now - timedelta(hours=3))
-    second = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q2",
-                    created_at=now - timedelta(hours=1))
-    dead = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q3", status="running",
-                  created_at=now - timedelta(hours=2),
-                  config={"started_at": old.isoformat(), "attempts": 1})
-    poison = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q4", status="running",
-                    config={"started_at": old.isoformat(), "attempts": MAX_ATTEMPTS})
+    first = Report(
+        company_id=co.id, fiscal_year=2025, fiscal_period="Q1", created_at=now - timedelta(hours=3)
+    )
+    second = Report(
+        company_id=co.id, fiscal_year=2025, fiscal_period="Q2", created_at=now - timedelta(hours=1)
+    )
+    dead = Report(
+        company_id=co.id,
+        fiscal_year=2025,
+        fiscal_period="Q3",
+        status="running",
+        created_at=now - timedelta(hours=2),
+        config={"started_at": old.isoformat(), "attempts": 1},
+    )
+    poison = Report(
+        company_id=co.id,
+        fiscal_year=2025,
+        fiscal_period="Q4",
+        status="running",
+        config={"started_at": old.isoformat(), "attempts": MAX_ATTEMPTS},
+    )
     db.add_all([first, second, dead, poison])
     db.flush()
 
@@ -41,11 +53,20 @@ def test_sweep_spares_a_long_report_with_a_fresh_heartbeat(db):
     db.add(co)
     db.flush()
     old = (datetime.now(UTC) - STALE_AFTER - timedelta(minutes=1)).isoformat()
-    live = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q1", status="running",
-                  config={"started_at": old, "heartbeat_at": datetime.now(UTC).isoformat(),
-                          "attempts": 1})
-    stuck = Report(company_id=co.id, fiscal_year=2025, fiscal_period="Q2", status="running",
-                   config={"started_at": old, "heartbeat_at": old, "attempts": 1})
+    live = Report(
+        company_id=co.id,
+        fiscal_year=2025,
+        fiscal_period="Q1",
+        status="running",
+        config={"started_at": old, "heartbeat_at": datetime.now(UTC).isoformat(), "attempts": 1},
+    )
+    stuck = Report(
+        company_id=co.id,
+        fiscal_year=2025,
+        fiscal_period="Q2",
+        status="running",
+        config={"started_at": old, "heartbeat_at": old, "attempts": 1},
+    )
     db.add_all([live, stuck])
     db.flush()
     assert sweep_stale(db) == 1

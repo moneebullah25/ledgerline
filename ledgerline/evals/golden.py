@@ -53,12 +53,29 @@ QUOTA = {"reported_result": 90, "comparison": 45, "guidance": 25, "qualitative":
 # "guidance_known" = guidance whose target period has a stored 10-Q/10-K (an outcome to check).
 HELDOUT_EXTRACTOR = "s4-llm-1"
 HELDOUT_SEED = 20260925
-HELDOUT_QUOTA = {"reported_result": 40, "comparison": 25, "guidance_known": 20, "guidance": 5,
-                 "qualitative": 20}
+HELDOUT_QUOTA = {
+    "reported_result": 40,
+    "comparison": 25,
+    "guidance_known": 20,
+    "guidance": 5,
+    "qualitative": 20,
+}
 LABELS = ("supported", "contradicted", "unverifiable")
-FIELDS = ("text", "claim_type", "metric", "value", "value_high", "unit", "fiscal_year",
-          "fiscal_period", "target_fiscal_year", "target_fiscal_period", "comparison",
-          "hedging_score", "speaker_role")
+FIELDS = (
+    "text",
+    "claim_type",
+    "metric",
+    "value",
+    "value_high",
+    "unit",
+    "fiscal_year",
+    "fiscal_period",
+    "target_fiscal_year",
+    "target_fiscal_period",
+    "comparison",
+    "hedging_score",
+    "speaker_role",
+)
 ANNOTATOR = (
     "Single annotator: the Claude agent that built the D evals (claude-opus-5-5), not a human. "
     "Pass 1 read the release context and the raw xbrl_fact rows / 10-K and 10-Q text lines "
@@ -93,8 +110,11 @@ def to_claim(s: Session, rec: dict) -> Claim:
     filing = s.scalars(select(Filing).where(Filing.accession_no == rec["accession_no"])).one()
     c = rec["claim"]
     return Claim(
-        company_id=filing.company_id, filing_id=filing.id, span_start=rec["span"][0],
-        span_end=rec["span"][1], extractor_version=rec["extractor_version"],
+        company_id=filing.company_id,
+        filing_id=filing.id,
+        span_start=rec["span"][0],
+        span_end=rec["span"][1],
+        extractor_version=rec["extractor_version"],
         **{k: c[k] for k in FIELDS if k not in ("value", "value_high")},
         value=None if c["value"] is None else Decimal(str(c["value"])),
         value_high=None if c["value_high"] is None else Decimal(str(c["value_high"])),
@@ -146,15 +166,24 @@ def sample(s: Session) -> list[dict]:
         .join(Company, Company.id == Claim.company_id)
         .join(Filing, Filing.id == Claim.filing_id)
     ).all()
-    claims = [{"source_claim_id": c.id, "ticker": t, "accession_no": acc,
-               "extractor_version": c.extractor_version, "span": [c.span_start, c.span_end],
-               "claim_type": c.claim_type, "metric": c.metric,
-               "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}}
-              for c, t, acc in rows]
+    claims = [
+        {
+            "source_claim_id": c.id,
+            "ticker": t,
+            "accession_no": acc,
+            "extractor_version": c.extractor_version,
+            "span": [c.span_start, c.span_end],
+            "claim_type": c.claim_type,
+            "metric": c.metric,
+            "claim": {k: jsonable(getattr(c, k)) for k in FIELDS},
+        }
+        for c, t, acc in rows
+    ]
     picked = stratified(claims, QUOTA)
-    return [{"id": f"g{i + 1:03d}", **{k: v for k, v in c.items()
-                                      if k not in ("claim_type", "metric")}}
-            for i, c in enumerate(picked)]
+    return [
+        {"id": f"g{i + 1:03d}", **{k: v for k, v in c.items() if k not in ("claim_type", "metric")}}
+        for i, c in enumerate(picked)
+    ]
 
 
 def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
@@ -167,34 +196,51 @@ def heldout_candidates(claims: list[dict], golden: list[dict], judged: set[int])
     spans = defaultdict(list)
     for g in golden:
         spans[g["accession_no"]].append(tuple(g["span"]))
-    return [c for c in claims if c["source_claim_id"] not in judged
-            and not any(_overlaps(tuple(c["span"]), sp) for sp in spans[c["accession_no"]])]
+    return [
+        c
+        for c in claims
+        if c["source_claim_id"] not in judged
+        and not any(_overlaps(tuple(c["span"]), sp) for sp in spans[c["accession_no"]])
+    ]
 
 
 def sample_heldout(s: Session) -> list[dict]:
-    rows = s.execute(text("""
+    rows = s.execute(
+        text("""
         SELECT c.id, co.ticker, f.accession_no, c.claim_type = 'guidance' AND EXISTS (
                  SELECT 1 FROM filing p WHERE p.company_id = c.company_id
                    AND p.form_type IN ('10-Q', '10-K') AND p.fiscal_year = c.target_fiscal_year
                    AND (p.fiscal_period = c.target_fiscal_period
                         OR (c.target_fiscal_period = 'Q4' AND p.fiscal_period = 'FY')))
         FROM claim c JOIN company co ON co.id = c.company_id JOIN filing f ON f.id = c.filing_id
-        WHERE c.extractor_version = :v"""), {"v": HELDOUT_EXTRACTOR}).all()
+        WHERE c.extractor_version = :v"""),
+        {"v": HELDOUT_EXTRACTOR},
+    ).all()
     known = {cid for cid, _, _, k in rows if k}
     meta = {cid: (t, acc) for cid, t, acc, _ in rows}
     judged = set(s.scalars(text("SELECT DISTINCT claim_id FROM verdict")))
     claims = []
     for c in s.scalars(select(Claim).where(Claim.id.in_(meta))):
         t, acc = meta[c.id]
-        claims.append({"source_claim_id": c.id, "ticker": t, "accession_no": acc,
-                       "extractor_version": c.extractor_version, "span": [c.span_start, c.span_end],
-                       "claim_type": "guidance_known" if c.id in known else c.claim_type,
-                       "metric": c.metric, "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}})
-    picked = stratified(heldout_candidates(claims, load(GOLDEN), judged), HELDOUT_QUOTA,
-                        HELDOUT_SEED)
-    return [{"id": f"h{i + 1:03d}", **{k: v for k, v in c.items()
-                                      if k not in ("claim_type", "metric")}}
-            for i, c in enumerate(picked)]
+        claims.append(
+            {
+                "source_claim_id": c.id,
+                "ticker": t,
+                "accession_no": acc,
+                "extractor_version": c.extractor_version,
+                "span": [c.span_start, c.span_end],
+                "claim_type": "guidance_known" if c.id in known else c.claim_type,
+                "metric": c.metric,
+                "claim": {k: jsonable(getattr(c, k)) for k in FIELDS},
+            }
+        )
+    picked = stratified(
+        heldout_candidates(claims, load(GOLDEN), judged), HELDOUT_QUOTA, HELDOUT_SEED
+    )
+    return [
+        {"id": f"h{i + 1:03d}", **{k: v for k, v in c.items() if k not in ("claim_type", "metric")}}
+        for i, c in enumerate(picked)
+    ]
 
 
 # ---------------------------------------------------------------- annotation worksheet
@@ -223,7 +269,12 @@ def number_matcher(claim: dict):
     exact = {t for t in _NUM.findall(claim["text"]) if len(t.replace(",", "")) >= 2}
     ranges = []
     v = claim["value"]
-    if claim["unit"] == "USD" and v is not None and abs(v) >= 1e6 and (hit := printed(claim["text"], v)):
+    if (
+        claim["unit"] == "USD"
+        and v is not None
+        and abs(v) >= 1e6
+        and (hit := printed(claim["text"], v))
+    ):
         m, scale = hit
         half = 0.5 * 10 ** -_decimals(m.group()) * scale
         ranges = [((abs(v) - half) / d, (abs(v) + half) / d) for d in (1e6, 1e3)]
@@ -235,6 +286,7 @@ def number_matcher(claim: dict):
             if "." not in t and any(lo <= int(t.replace(",", "")) <= hi for lo, hi in ranges):
                 return True
         return False
+
     return match
 
 
@@ -246,12 +298,17 @@ def _text(storage_path: str) -> str:
     return html_to_text(read_object(storage_path), PurePath(storage_path).suffix)
 
 
-def _periodic_lines(s: Session, company_id: int, claim: dict, match,
-                    limit: int = 12) -> list[str]:
+def _periodic_lines(s: Session, company_id: int, claim: dict, match, limit: int = 12) -> list[str]:
     fy = claim["target_fiscal_year"] or claim["fiscal_year"]
-    filings = s.scalars(select(Filing).where(
-        Filing.company_id == company_id, Filing.form_type.in_(("10-Q", "10-K")),
-        Filing.fiscal_year.between(fy, fy + 1)).order_by(Filing.filed_at)).all()
+    filings = s.scalars(
+        select(Filing)
+        .where(
+            Filing.company_id == company_id,
+            Filing.form_type.in_(("10-Q", "10-K")),
+            Filing.fiscal_year.between(fy, fy + 1),
+        )
+        .order_by(Filing.filed_at)
+    ).all()
     out = []
     for f in filings:
         hits = [line for line in _text(f.storage_path).splitlines() if match(line)]
@@ -266,19 +323,26 @@ def _xbrl_rows(s: Session, company_id: int, claim: dict, event) -> list[str]:
         return []
     names = [concept.name, *(concept.ratio_of or concept.diff_of or ())]
     tags = [t for n in names for t in CONCEPTS[n].tags]
-    rows = s.scalars(select(XbrlFact).where(
-        XbrlFact.company_id == company_id, XbrlFact.tag.in_(tags),
-        XbrlFact.period_end.between(event - timedelta(days=500), event + timedelta(days=400)),
-    ).order_by(XbrlFact.tag, XbrlFact.period_end, XbrlFact.duration_days)).all()
+    rows = s.scalars(
+        select(XbrlFact)
+        .where(
+            XbrlFact.company_id == company_id,
+            XbrlFact.tag.in_(tags),
+            XbrlFact.period_end.between(event - timedelta(days=500), event + timedelta(days=400)),
+        )
+        .order_by(XbrlFact.tag, XbrlFact.period_end, XbrlFact.duration_days)
+    ).all()
     seen, out = set(), []
     for r in rows:
         key = (r.tag, r.period_start, r.period_end, r.value)
         if key in seen:
             continue
         seen.add(key)
-        out.append(f"  id={r.id} {r.tag.split(':')[1]} {float(r.value):,.2f} {r.unit} "
-                   f"{r.period_start}..{r.period_end} ({r.duration_days}d) "
-                   f"fy={r.fiscal_year}{r.fiscal_period} {r.form}{' DERIVED' if r.derived else ''}")
+        out.append(
+            f"  id={r.id} {r.tag.split(':')[1]} {float(r.value):,.2f} {r.unit} "
+            f"{r.period_start}..{r.period_end} ({r.duration_days}d) "
+            f"fy={r.fiscal_year}{r.fiscal_period} {r.form}{' DERIVED' if r.derived else ''}"
+        )
     return out
 
 
@@ -290,20 +354,30 @@ def worksheet(s: Session, recs: list[dict], hide_labels: bool = True, xbrl: bool
         f = s.scalars(select(Filing).where(Filing.accession_no == r["accession_no"])).one()
         c, (a, b) = r["claim"], r["span"]
         text = _text(f.storage_path)
-        ctx = text[max(0, a - 300):b + 200].replace("\n", " / ")
-        out += [(f"=== {r['id']} {r['ticker']} {c['claim_type']} metric={c['metric']} "
-                 f"value={c['value']} hi={c['value_high']} unit={c['unit']} "
-                 f"release={c['fiscal_year']}{c['fiscal_period']} "
-                 f"target={c['target_fiscal_year']}{c['target_fiscal_period']} "
-                 f"cmp={c['comparison']}"),
-                f"CLAIM: {c['text']}", f"CONTEXT: ...{ctx}..."]
+        ctx = text[max(0, a - 300) : b + 200].replace("\n", " / ")
+        out += [
+            (
+                f"=== {r['id']} {r['ticker']} {c['claim_type']} metric={c['metric']} "
+                f"value={c['value']} hi={c['value_high']} unit={c['unit']} "
+                f"release={c['fiscal_year']}{c['fiscal_period']} "
+                f"target={c['target_fiscal_year']}{c['target_fiscal_period']} "
+                f"cmp={c['comparison']}"
+            ),
+            f"CLAIM: {c['text']}",
+            f"CONTEXT: ...{ctx}...",
+        ]
         if not hide_labels and "gold" in r:
             out.append(f"LABEL: {r['gold']} | {r['evidence']}")
         if xbrl:
             out += ["XBRL:", *(_xbrl_rows(s, f.company_id, c, f.filed_at) or ["  (none)"])]
         if c["value"] is not None:
-            out += ["FILINGS:", *(_periodic_lines(s, f.company_id, c, number_matcher(c))
-                                  or ["  (no line prints the number)"])]
+            out += [
+                "FILINGS:",
+                *(
+                    _periodic_lines(s, f.company_id, c, number_matcher(c))
+                    or ["  (no line prints the number)"]
+                ),
+            ]
         out.append("")
     return "\n".join(out)
 
@@ -324,7 +398,7 @@ def _rewrite_number(text: str, value: float, factor: float) -> tuple[str, float]
     if abs(new - old) < 0.1 * abs(old):
         return None
     tok = f"{new:,.{dec}f}" if "," in m.group() else f"{new:.{dec}f}"
-    return text[:m.start()] + tok + text[m.end():], (1 if value > 0 else -1) * new * scale
+    return text[: m.start()] + tok + text[m.end() :], (1 if value > 0 else -1) * new * scale
 
 
 def perturb(recs: list[dict], seed: int = SEED) -> list[dict]:
@@ -339,21 +413,32 @@ def perturb(recs: list[dict], seed: int = SEED) -> list[dict]:
     out = []
     for r in recs:
         c = r["claim"]
-        if (r["gold"] != "supported" or not c["value"] or c["value_high"] is not None
-                or c["claim_type"] not in ("reported_result", "comparison")):
+        if (
+            r["gold"] != "supported"
+            or not c["value"]
+            or c["value_high"] is not None
+            or c["claim_type"] not in ("reported_result", "comparison")
+        ):
             continue
         factor = rng.choice((0.8, 0.85, 1.15, 1.25))
         if (hit := _rewrite_number(c["text"], c["value"], factor)) is None:
             continue
         text, value = hit
-        out.append(r | {
-            "id": f"p{r['id'][1:]}", "perturbed_from": r["id"],
-            "claim": c | {"text": text, "value": round(value, 6)},
-            "gold": "contradicted", "pass1": None, "pass2": None, "adjudication": None,
-            "evidence": f"Perturbation of {r['id']} (printed value x{factor}); source evidence: "
-                        f"{r['evidence']}",
-            "annotator": "Constructed by golden.perturb; gold by construction from the source label.",
-        })
+        out.append(
+            r
+            | {
+                "id": f"p{r['id'][1:]}",
+                "perturbed_from": r["id"],
+                "claim": c | {"text": text, "value": round(value, 6)},
+                "gold": "contradicted",
+                "pass1": None,
+                "pass2": None,
+                "adjudication": None,
+                "evidence": f"Perturbation of {r['id']} (printed value x{factor}); source evidence: "
+                f"{r['evidence']}",
+                "annotator": "Constructed by golden.perturb; gold by construction from the source label.",
+            }
+        )
     return out
 
 
@@ -368,9 +453,13 @@ _FIXTURE_TABLES = {
     "company": ("id, cik, ticker, name, fiscal_year_end", "ticker = ANY({t})"),
     "filing": ("*", "company_id IN (SELECT id FROM company WHERE ticker = ANY({t}))"),
     "xbrl_fact": ("*", "company_id IN (SELECT id FROM company WHERE ticker = ANY({t}))"),
-    "chunk": ("id, filing_id, chunk_index, section_path, char_start, char_end, text, token_count",
-              ("filing_id IN (SELECT f.id FROM filing f JOIN company c ON c.id = f.company_id "
-               "WHERE c.ticker = ANY({t}) AND f.form_type IN ('10-K', '10-Q', '10-K/A', '10-Q/A'))")),
+    "chunk": (
+        "id, filing_id, chunk_index, section_path, char_start, char_end, text, token_count",
+        (
+            "filing_id IN (SELECT f.id FROM filing f JOIN company c ON c.id = f.company_id "
+            "WHERE c.ticker = ANY({t}) AND f.form_type IN ('10-K', '10-Q', '10-K/A', '10-Q/A'))"
+        ),
+    ),
     "market_price": ("*", "ticker = ANY({t}) OR ticker = 'SPY'"),
 }
 
@@ -384,8 +473,10 @@ def dump_fixture(s: Session, tickers: list[str], out: Path = FIXTURE) -> dict[st
     out.mkdir(parents=True, exist_ok=True)
     with _raw(s).cursor() as cur:
         for table, (cols, where) in _FIXTURE_TABLES.items():
-            query = sql.SQL(f"COPY (SELECT {cols} FROM {table} WHERE {where} ORDER BY 1) "
-                            "TO STDOUT WITH (FORMAT csv, HEADER)").format(t=sql.Literal(tickers))
+            query = sql.SQL(
+                f"COPY (SELECT {cols} FROM {table} WHERE {where} ORDER BY 1) "
+                "TO STDOUT WITH (FORMAT csv, HEADER)"
+            ).format(t=sql.Literal(tickers))
             with gzip.open(out / f"{table}.csv.gz", "wb") as f, cur.copy(query) as copy:
                 for block in copy:
                     f.write(block)
@@ -408,18 +499,37 @@ def load_fixture(s: Session, src: Path = FIXTURE, batch: int = 256) -> int:
                     while block := f.read(1 << 20):
                         copy.write(block)
     for table in _FIXTURE_TABLES:
-        s.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
-                       f"(SELECT coalesce(max(id), 0) + 1 FROM {table}), false)"))
+        s.execute(
+            text(
+                f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+                f"(SELECT coalesce(max(id), 0) + 1 FROM {table}), false)"
+            )
+        )
     rows = s.execute(
-        select(Chunk.id, Company.name, Filing.form_type, Filing.fiscal_year, Filing.fiscal_period,
-               Filing.period_of_report, Chunk.section_path, Chunk.text)
-        .join(Filing, Filing.id == Chunk.filing_id).join(Company, Company.id == Filing.company_id)
-        .where(Chunk.embedding.is_(None)).order_by(Chunk.id)).all()
+        select(
+            Chunk.id,
+            Company.name,
+            Filing.form_type,
+            Filing.fiscal_year,
+            Filing.fiscal_period,
+            Filing.period_of_report,
+            Chunk.section_path,
+            Chunk.text,
+        )
+        .join(Filing, Filing.id == Chunk.filing_id)
+        .join(Company, Company.id == Filing.company_id)
+        .where(Chunk.embedding.is_(None))
+        .order_by(Chunk.id)
+    ).all()
     for i in range(0, len(rows), batch):
-        part = rows[i:i + batch]
+        part = rows[i : i + batch]
         vecs = embed.embed_passages([passage(*r[1:]) for r in part])
-        s.execute(Chunk.__table__.update().where(Chunk.id == bindparam("cid")).values(
-            embedding=bindparam("vec")), [{"cid": r[0], "vec": v} for r, v in zip(part, vecs)])
+        s.execute(
+            Chunk.__table__.update()
+            .where(Chunk.id == bindparam("cid"))
+            .values(embedding=bindparam("vec")),
+            [{"cid": r[0], "vec": v} for r, v in zip(part, vecs)],
+        )
     return len(rows)
 
 
@@ -431,8 +541,17 @@ def main(argv: list[str] | None = None) -> None:
     from ledgerline.db import session
 
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.golden")
-    p.add_argument("cmd", choices=("sample", "sample-heldout", "worksheet", "perturb",
-                                   "dump-fixture", "load-fixture"))
+    p.add_argument(
+        "cmd",
+        choices=(
+            "sample",
+            "sample-heldout",
+            "worksheet",
+            "perturb",
+            "dump-fixture",
+            "load-fixture",
+        ),
+    )
     p.add_argument("--ids", help="comma-separated golden ids (worksheet)")
     p.add_argument("--source", type=Path, default=None, help="records file (worksheet)")
     p.add_argument("--pass2", action="store_true", help="worksheet without XBRL rows")

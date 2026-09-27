@@ -10,8 +10,12 @@ from functools import lru_cache
 from ledgerline.config import settings
 from ledgerline.extract.normalize import find_periods, match_metrics, parse_values
 
-LABELS = {"financial metric": "metric", "money amount": "money", "percentage": "percent",
-          "time period": "period"}
+LABELS = {
+    "financial metric": "metric",
+    "money amount": "money",
+    "percentage": "percent",
+    "time period": "period",
+}
 THRESHOLD = 0.5  # GLiNER's documented default; not tuned on the eval set
 
 Span = tuple[int, int, str]  # (start, end, label) with label in LABELS.values()
@@ -36,7 +40,7 @@ def regex_spans(text: str) -> list[Span]:
             continue
         # Ranges are two entities ("$89 billion" and "$93 billion"); re-parse each side.
         label = "money" if v.unit.startswith("USD") else "percent"
-        parts = [p for p in parse_values(text[v.start:v.end]) if p.value_high is None] or [v]
+        parts = [p for p in parse_values(text[v.start : v.end]) if p.value_high is None] or [v]
         spans += [(v.start + p.start, v.start + p.end, label) for p in parts]
     spans += [(m.start, m.end, "metric") for m in match_metrics(text)]
     spans += [(s, e, "period") for s, e, *_ in find_periods(text)]

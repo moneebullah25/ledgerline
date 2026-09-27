@@ -16,15 +16,18 @@ BENCHMARK = "SPY"
 # strings without its cookies; the bare "Mozilla/5.0" is served.
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
 PRICE_RTOL = 1e-6  # float32 ulp is ~6e-8 relative; a dividend re-base moves adj_close >1e-4
-LICENSE_NOTE = ("Yahoo Finance chart API; personal/research use under Yahoo's terms, "
-                "not redistributed")
+LICENSE_NOTE = (
+    "Yahoo Finance chart API; personal/research use under Yahoo's terms, not redistributed"
+)
 
 
 def ingest_market_data(s: Session, ticker: str, start: date, end: date) -> int:
     p1 = int(datetime.combine(start, time(), UTC).timestamp())
     p2 = int(datetime.combine(end + timedelta(days=1), time(), UTC).timestamp())
-    url = (f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
-           f"?period1={p1}&period2={p2}&interval=1d")
+    url = (
+        f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
+        f"?period1={p1}&period2={p2}&interval=1d"
+    )
     raw = get(url, _HEADERS)
     prov = {"sha256": hashlib.sha256(raw).hexdigest(), "license_note": LICENSE_NOTE}  # FR-6
     rows = [r | prov for r in parse_chart(json.loads(raw), ticker, url)]
@@ -37,14 +40,30 @@ def ingest_market_data(s: Session, ticker: str, start: date, end: date) -> int:
     # the live quote), so comparing it would rewrite the whole history on each run. Prices
     # compare within PRICE_RTOL: Yahoo's adj_close wobbles by one float32 ulp between calls.
     stmt = insert(MarketPrice)
-    moved = [func.abs(getattr(MarketPrice, c) - stmt.excluded[c])
-             > PRICE_RTOL * func.abs(stmt.excluded[c]) for c in ("close", "adj_close")]
+    moved = [
+        func.abs(getattr(MarketPrice, c) - stmt.excluded[c])
+        > PRICE_RTOL * func.abs(stmt.excluded[c])
+        for c in ("close", "adj_close")
+    ]
     stmt = stmt.on_conflict_do_update(
         constraint="uq_price",
-        set_={c: stmt.excluded[c] for c in ("close", "adj_close", "volume", "source_url",
-                                            "fetched_at", "sha256", "license_note")},
-        where=or_(*moved, MarketPrice.volume.is_distinct_from(stmt.excluded.volume),
-                  MarketPrice.sha256 == "unrecorded"),
+        set_={
+            c: stmt.excluded[c]
+            for c in (
+                "close",
+                "adj_close",
+                "volume",
+                "source_url",
+                "fetched_at",
+                "sha256",
+                "license_note",
+            )
+        },
+        where=or_(
+            *moved,
+            MarketPrice.volume.is_distinct_from(stmt.excluded.volume),
+            MarketPrice.sha256 == "unrecorded",
+        ),
     ).returning(MarketPrice.id)
     return len(s.execute(stmt, rows).all())
 
@@ -59,7 +78,13 @@ def parse_chart(payload: dict, ticker: str, url: str) -> list[dict]:
         if quote["close"][i] is None or adj[i] is None:
             continue  # halted or not-yet-settled bar
         day = datetime.fromtimestamp(ts + offset, UTC).date()
-        rows[day] = {"ticker": ticker, "day": day, "close": quote["close"][i],
-                     "adj_close": adj[i], "volume": quote["volume"][i],
-                     "source_url": url, "fetched_at": now}
+        rows[day] = {
+            "ticker": ticker,
+            "day": day,
+            "close": quote["close"][i],
+            "adj_close": adj[i],
+            "volume": quote["volume"][i],
+            "source_url": url,
+            "fetched_at": now,
+        }
     return list(rows.values())

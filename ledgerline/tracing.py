@@ -47,10 +47,17 @@ class Tracer:
         finally:
             self._stack.pop()
             attrs["latency_ms"] = round((time.perf_counter() - t0) * 1000)
-            self.spans.append(Span(
-                id=sid, trace_id=self.trace_id, parent_id=parent, name=name,
-                started_at=started, ended_at=datetime.now(UTC), attrs=attrs,
-            ))
+            self.spans.append(
+                Span(
+                    id=sid,
+                    trace_id=self.trace_id,
+                    parent_id=parent,
+                    name=name,
+                    started_at=started,
+                    ended_at=datetime.now(UTC),
+                    attrs=attrs,
+                )
+            )
 
     def flush(self, s: Session) -> None:
         s.add_all(self.spans)

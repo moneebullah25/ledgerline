@@ -39,14 +39,43 @@ INDEX = b"""<table class="tableFile">
 <tr><td>2</td><td>EX-99.1</td><td><a href="/Archives/edgar/data/1/2/a2026q2earningsreleaseex-9.htm">a</a></td><td>EX-99.1</td><td>1</td></tr>
 </table>"""
 
-SUBMISSIONS = {"name": "Apple Inc.", "fiscalYearEnd": "0927", "filings": {"recent": {
-    "accessionNumber": ["r1", "q1", "old"], "form": ["8-K", "10-Q", "10-Q"],
-    "filingDate": ["2025-01-30", "2025-01-31", "2024-08-02"],
-    "reportDate": ["2025-01-30", "2024-12-28", "2024-06-29"],
-    "primaryDocument": ["r1.htm", "q1.htm", "old.htm"], "items": ["2.02,9.01", "", ""]}}}
-FACTS = {"entityName": "Apple Inc.", "facts": {"us-gaap": {"NetIncomeLoss": {"units": {"USD": [
-    {"start": "2024-09-29", "end": "2024-12-28", "val": 5, "accn": "q1", "fy": 2025, "fp": "Q1",
-     "form": "10-Q", "filed": "2025-01-31"}]}}}}}
+SUBMISSIONS = {
+    "name": "Apple Inc.",
+    "fiscalYearEnd": "0927",
+    "filings": {
+        "recent": {
+            "accessionNumber": ["r1", "q1", "old"],
+            "form": ["8-K", "10-Q", "10-Q"],
+            "filingDate": ["2025-01-30", "2025-01-31", "2024-08-02"],
+            "reportDate": ["2025-01-30", "2024-12-28", "2024-06-29"],
+            "primaryDocument": ["r1.htm", "q1.htm", "old.htm"],
+            "items": ["2.02,9.01", "", ""],
+        }
+    },
+}
+FACTS = {
+    "entityName": "Apple Inc.",
+    "facts": {
+        "us-gaap": {
+            "NetIncomeLoss": {
+                "units": {
+                    "USD": [
+                        {
+                            "start": "2024-09-29",
+                            "end": "2024-12-28",
+                            "val": 5,
+                            "accn": "q1",
+                            "fy": 2025,
+                            "fp": "Q1",
+                            "form": "10-Q",
+                            "filed": "2025-01-31",
+                        }
+                    ]
+                }
+            }
+        }
+    },
+}
 
 
 def fake_sec(url: str) -> bytes:
@@ -58,14 +87,17 @@ def fake_sec(url: str) -> bytes:
         return INDEX
     if url.endswith("old.htm"):
         from ledgerline.ingest.http import PermanentFetchError
+
         raise PermanentFetchError(url, 404)
     return b"<p>" + url.encode() + b"</p>"
 
 
 def test_exhibit_found_by_type_not_name(monkeypatch):
     monkeypatch.setattr(edgar, "sec_get", fake_sec)
-    assert edgar._exhibit_99_1("0000000001", "0000000001-26-000002") == \
-        "a2026q2earningsreleaseex-9.htm"
+    assert (
+        edgar._exhibit_99_1("0000000001", "0000000001-26-000002")
+        == "a2026q2earningsreleaseex-9.htm"
+    )
 
 
 @pytest.mark.db
@@ -106,8 +138,12 @@ def test_store_is_idempotent_at_the_database(db, monkeypatch, tmp_path):
     monkeypatch.setattr(settings(), "data_dir", tmp_path)
     monkeypatch.setattr(edgar, "sec_get", fake_sec)
     company_id = edgar.ensure_company(db, "AAPL", "Apple Inc.")
-    r = {"accessionNumber": "q1", "form": "10-Q", "filingDate": "2025-01-31",
-         "reportDate": "2024-12-28"}
+    r = {
+        "accessionNumber": "q1",
+        "form": "10-Q",
+        "filingDate": "2025-01-31",
+        "reportDate": "2024-12-28",
+    }
     assert edgar._store(db, company_id, "0000320193", r, "q1.htm", 2025, "Q1") == 1
     assert edgar._store(db, company_id, "0000320193", r, "q1.htm", 2025, "Q1") == 0
     assert db.scalar(select(func.count()).select_from(Filing)) == 1
@@ -139,14 +175,36 @@ def test_exhausted_retries_become_a_row_and_the_ticker_continues(db, monkeypatch
 
 
 def ocf(*facts):
-    return {"entityName": "Apple Inc.", "facts": {"us-gaap": {
-        "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": list(facts)}}}}}
+    return {
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "NetCashProvidedByUsedInOperatingActivities": {"units": {"USD": list(facts)}}
+            }
+        },
+    }
 
 
-Q1 = {"start": "2024-09-29", "end": "2024-12-28", "val": 30, "accn": "a1", "fy": 2025,
-      "fp": "Q1", "form": "10-Q", "filed": "2025-01-31"}
-H1 = {"start": "2024-09-29", "end": "2025-03-29", "val": 50, "accn": "a2", "fy": 2025,
-      "fp": "Q2", "form": "10-Q", "filed": "2025-05-01"}
+Q1 = {
+    "start": "2024-09-29",
+    "end": "2024-12-28",
+    "val": 30,
+    "accn": "a1",
+    "fy": 2025,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2025-01-31",
+}
+H1 = {
+    "start": "2024-09-29",
+    "end": "2025-03-29",
+    "val": 50,
+    "accn": "a2",
+    "fy": 2025,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2025-05-01",
+}
 
 
 @pytest.mark.db
@@ -156,8 +214,9 @@ def test_changed_payload_rebases_derived_quarters(db, monkeypatch, tmp_path):
     monkeypatch.setattr(xbrl, "sec_get", lambda url: json.dumps(payload).encode())
 
     def derived():
-        return db.execute(select(XbrlFact.fiscal_period, XbrlFact.value)
-                          .where(XbrlFact.derived)).all()
+        return db.execute(
+            select(XbrlFact.fiscal_period, XbrlFact.value).where(XbrlFact.derived)
+        ).all()
 
     payload = ocf(Q1, H1)
     assert xbrl.ingest_xbrl_facts(db, "AAPL") == 3  # Q1, H1, derived Q2 = 20
@@ -182,10 +241,22 @@ def test_changed_payload_rebases_derived_quarters(db, monkeypatch, tmp_path):
 
 
 def chart(adj):
-    return json.dumps({"chart": {"result": [{
-        "meta": {"gmtoffset": -14400}, "timestamp": [1756992600],
-        "indicators": {"quote": [{"close": [239.78], "volume": [100]}],
-                       "adjclose": [{"adjclose": [adj]}]}}]}}).encode()
+    return json.dumps(
+        {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"gmtoffset": -14400},
+                        "timestamp": [1756992600],
+                        "indicators": {
+                            "quote": [{"close": [239.78], "volume": [100]}],
+                            "adjclose": [{"adjclose": [adj]}],
+                        },
+                    }
+                ]
+            }
+        }
+    ).encode()
 
 
 @pytest.mark.db

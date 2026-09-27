@@ -50,8 +50,10 @@ from ledgerline.report.severity import load_weights, severity
 from ledgerline.tracing import Tracer, error_summary
 
 log = logging.getLogger("ledgerline.pipeline")
-FY_UNSUPPORTED = ("FY reports are not supported: the full year is covered by the fourth-quarter "
-                  "earnings release, so request Q4")
+FY_UNSUPPORTED = (
+    "FY reports are not supported: the full year is covered by the fourth-quarter "
+    "earnings release, so request Q4"
+)
 INFRA_ERRORS = (SQLAlchemyError, ImportError, llm.LLMUnavailable)
 HEARTBEAT_S = 60  # refresh the heartbeat at least this often while claims are in flight
 
@@ -71,27 +73,36 @@ def _ensure_claims(s: Session, report: Report) -> list[Claim]:
         _touch(s, report.id)
 
     def done_with_source() -> None:
-        _heartbeat(s, report, extract_cost_usd=report.config.get("extract_cost_usd", 0.0)
-                   + sum(spent))
+        _heartbeat(
+            s, report, extract_cost_usd=report.config.get("extract_cost_usd", 0.0) + sum(spent)
+        )
         spent.clear()
         s.commit()
 
-    releases = s.scalars(select(Filing.id).where(
-        Filing.company_id == report.company_id, Filing.form_type == "8-K",
-        Filing.fiscal_year == report.fiscal_year, Filing.fiscal_period == report.fiscal_period,
-        ~exists().where(Claim.filing_id == Filing.id, *current),
-    )).all()
+    releases = s.scalars(
+        select(Filing.id).where(
+            Filing.company_id == report.company_id,
+            Filing.form_type == "8-K",
+            Filing.fiscal_year == report.fiscal_year,
+            Filing.fiscal_period == report.fiscal_period,
+            ~exists().where(Claim.filing_id == Filing.id, *current),
+        )
+    ).all()
     for filing_id in releases:
         extract_for_filing(s, filing_id, on_progress=progress)
         done_with_source()
 
-    calls = s.scalars(select(CallAudio.id).where(
-        CallAudio.company_id == report.company_id, CallAudio.kind == "earnings_call",
-        CallAudio.fiscal_year == report.fiscal_year,
-        CallAudio.fiscal_period == report.fiscal_period,
-        ~exists().where(Claim.segment_id == Segment.id,
-                        Segment.call_audio_id == CallAudio.id, *current),
-    )).all()
+    calls = s.scalars(
+        select(CallAudio.id).where(
+            CallAudio.company_id == report.company_id,
+            CallAudio.kind == "earnings_call",
+            CallAudio.fiscal_year == report.fiscal_year,
+            CallAudio.fiscal_period == report.fiscal_period,
+            ~exists().where(
+                Claim.segment_id == Segment.id, Segment.call_audio_id == CallAudio.id, *current
+            ),
+        )
+    ).all()
     for call_id in calls:
         if not s.scalar(select(exists().where(Segment.call_audio_id == call_id))):
             from ledgerline.audio import process_call  # needs the [ml] extra
@@ -100,17 +111,28 @@ def _ensure_claims(s: Session, report: Report) -> list[Claim]:
         extract_for_call(s, call_id, on_progress=progress)
         done_with_source()
 
-    return list(s.scalars(select(Claim).where(
-        Claim.company_id == report.company_id, Claim.fiscal_year == report.fiscal_year,
-        Claim.fiscal_period == report.fiscal_period, *current,
-    ).order_by(Claim.id)))
+    return list(
+        s.scalars(
+            select(Claim)
+            .where(
+                Claim.company_id == report.company_id,
+                Claim.fiscal_year == report.fiscal_year,
+                Claim.fiscal_period == report.fiscal_period,
+                *current,
+            )
+            .order_by(Claim.id)
+        )
+    )
 
 
 def _deviation(result) -> float | None:
     """The XBRL agent's payload["deviation"] (signed; severity wants the magnitude)."""
     for e in result.evidence:
-        if (e.agent == "xbrl_table" and e.stance != "insufficient"
-                and (d := e.payload.get("deviation")) is not None):
+        if (
+            e.agent == "xbrl_table"
+            and e.stance != "insufficient"
+            and (d := e.payload.get("deviation")) is not None
+        ):
             return abs(float(d))
     return None
 
@@ -132,8 +154,13 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
     def row(agent: str, stance: str, summary: str, citations: list, payload: dict) -> Evidence:
         us = usage.get(agent, [])
         return Evidence(
-            report_id=report.id, claim_id=claim.id, agent=agent, stance=stance,
-            summary=summary, citations=citations, payload=payload,
+            report_id=report.id,
+            claim_id=claim.id,
+            agent=agent,
+            stance=stance,
+            summary=summary,
+            citations=citations,
+            payload=payload,
             model=next((u.model for u in us if u.model), None),
             input_tokens=sum(u.input_tokens for u in us),
             output_tokens=sum(u.output_tokens for u in us),
@@ -145,29 +172,51 @@ def _persist(s: Session, report: Report, claim: Claim, result, tracer: Tracer) -
         )
 
     for e in result.evidence:
-        s.add(row(e.agent, e.stance, e.summary,
-                  [c.model_dump() for c in e.citations], e.payload))
+        s.add(row(e.agent, e.stance, e.summary, [c.model_dump() for c in e.citations], e.payload))
     if result.critic is not None:
         c = result.critic
-        s.add(row("critic", c.counter_stance, c.argument, [],
-                  {"weakest_evidence": c.weakest_evidence}))
+        s.add(
+            row(
+                "critic", c.counter_stance, c.argument, [], {"weakest_evidence": c.weakest_evidence}
+            )
+        )
 
     v = result.verdict
     row = Verdict(
-        report_id=report.id, claim_id=claim.id, label=v.label, confidence=v.confidence,
-        rationale=v.rationale, citations=[c.model_dump() for c in v.citations],
-        severity=severity(v.label, v.confidence, _deviation(result), claim.hedging_score,
-                          _abnormal_return(result), load_weights()),
-        refused=result.refused, prompt_version=result.prompt_version, model=result.model,
-        cost_usd=result.cost_usd, trace_id=tracer.trace_id,
+        report_id=report.id,
+        claim_id=claim.id,
+        label=v.label,
+        confidence=v.confidence,
+        rationale=v.rationale,
+        citations=[c.model_dump() for c in v.citations],
+        severity=severity(
+            v.label,
+            v.confidence,
+            _deviation(result),
+            claim.hedging_score,
+            _abnormal_return(result),
+            load_weights(),
+        ),
+        refused=result.refused,
+        prompt_version=result.prompt_version,
+        model=result.model,
+        cost_usd=result.cost_usd,
+        trace_id=tracer.trace_id,
     )
     s.add(row)
     tracer.flush(s)
     return row
 
 
-def _persist_no_verdict(s: Session, report: Report, claim: Claim, tracer: Tracer,
-                        prompt_version: str, err: Exception, reason: str) -> Verdict:
+def _persist_no_verdict(
+    s: Session,
+    report: Report,
+    claim: Claim,
+    tracer: Tracer,
+    prompt_version: str,
+    err: Exception,
+    reason: str,
+) -> Verdict:
     """FR-45 held: no verdict text that failed the audit is stored or shown. The spend is:
     what the finished nodes recorded on their spans, plus the failed call's usage if the
     error carries one (the verify_claim span only gets a total on success)."""
@@ -175,10 +224,18 @@ def _persist_no_verdict(s: Session, report: Report, claim: Claim, tracer: Tracer
     cost = sum(sp.attrs.get("cost_usd", 0.0) for sp in tracer.spans if sp.name != "verify_claim")
     cost += usage.cost_usd if usage is not None else 0.0
     row = Verdict(
-        report_id=report.id, claim_id=claim.id, label="unverifiable", confidence=0.0,
+        report_id=report.id,
+        claim_id=claim.id,
+        label="unverifiable",
+        confidence=0.0,
         rationale=f"{NO_VERDICT}{reason}.",
-        citations=[], severity=0.0, refused=True, prompt_version=prompt_version, model=None,
-        cost_usd=cost, trace_id=tracer.trace_id,
+        citations=[],
+        severity=0.0,
+        refused=True,
+        prompt_version=prompt_version,
+        model=None,
+        cost_usd=cost,
+        trace_id=tracer.trace_id,
     )
     s.add(row)
     tracer.flush(s)
@@ -194,8 +251,9 @@ def _touch(s: Session, report_id: uuid.UUID) -> None:
         return
     beat = func.jsonb_build_object("heartbeat_at", datetime.now(UTC).isoformat())
     with bind.begin() as c:
-        c.execute(update(Report).where(Report.id == report_id)
-                  .values(config=Report.config.op("||")(beat)))
+        c.execute(
+            update(Report).where(Report.id == report_id).values(config=Report.config.op("||")(beat))
+        )
 
 
 def _heartbeat(s: Session, report: Report, **extra) -> None:
@@ -208,8 +266,9 @@ def _heartbeat(s: Session, report: Report, **extra) -> None:
 def _verdict_cost(s: Session, report_id: uuid.UUID) -> float:
     # Verdict.cost_usd is the claim's whole spend (agents, critic, adjudicator), so it is
     # recomputed from committed rows rather than accumulated in memory a crash would lose.
-    return s.scalar(select(func.coalesce(func.sum(Verdict.cost_usd), 0.0))
-                    .where(Verdict.report_id == report_id))
+    return s.scalar(
+        select(func.coalesce(func.sum(Verdict.cost_usd), 0.0)).where(Verdict.report_id == report_id)
+    )
 
 
 def _verify(verify_claim, bind, claim_id: int, tracer: Tracer, offline: bool):
@@ -240,8 +299,9 @@ def _verify_claims(s: Session, report: Report, claims: list[Claim]) -> None:
         while todo or running:
             while todo and len(running) < workers:
                 claim, tracer = todo.pop(0), Tracer()  # read here after the worker is done
-                running[pool.submit(_verify, verify_claim, bind, claim.id, tracer,
-                                    guard is not None)] = (claim, tracer)
+                running[
+                    pool.submit(_verify, verify_claim, bind, claim.id, tracer, guard is not None)
+                ] = (claim, tracer)
             ready, _ = wait(running, timeout=HEARTBEAT_S, return_when=FIRST_COMPLETED)
             for future in ready:
                 claim, tracer = running.pop(future)
@@ -251,19 +311,25 @@ def _verify_claims(s: Session, report: Report, claims: list[Claim]) -> None:
                     raise  # leaving the with-block waits for the claims still in flight
                 except Exception as e:
                     log.exception("report %s claim %s: no verdict", report.id, claim.id)
-                    reason = ("the generated rationale failed the citation-integrity check"
-                              if isinstance(e, CitationIntegrityError)
-                              else f"{type(e).__name__} while verifying the claim")
-                    v = _persist_no_verdict(s, report, claim, tracer,
-                                            load_prompt("adjudicator")[1], e, reason)
+                    reason = (
+                        "the generated rationale failed the citation-integrity check"
+                        if isinstance(e, CitationIntegrityError)
+                        else f"{type(e).__name__} while verifying the claim"
+                    )
+                    v = _persist_no_verdict(
+                        s, report, claim, tracer, load_prompt("adjudicator")[1], e, reason
+                    )
                 else:
                     v = _persist(s, report, claim, result, tracer)
                 spent += v.cost_usd
                 finished += 1
                 pace = (COST_BUDGET_USD - extract_cost) * finished / len(claims)
                 if guard is None and spent > pace:
-                    guard = {"after_claims": finished, "of": len(claims),
-                             "spent_usd": round(extract_cost + spent, 4)}
+                    guard = {
+                        "after_claims": finished,
+                        "of": len(claims),
+                        "spent_usd": round(extract_cost + spent, 4),
+                    }
                     log.warning("report %s: budget guard fired %s", report.id, guard)
                 _heartbeat(s, report, **({"budget_guard": guard} if guard else {}))
                 s.commit()
@@ -292,8 +358,11 @@ def run_report(s: Session, report_id: uuid.UUID) -> None:
         if not claims:
             raise LookupError(
                 f"no claims for FY{report.fiscal_year} {report.fiscal_period}: no 8-K earnings "
-                "release or call audio ingested for that quarter (run make backfill)")
-        log.info("verifying claims", extra={"report_id": str(report_id), "claim_count": len(claims)})
+                "release or call audio ingested for that quarter (run make backfill)"
+            )
+        log.info(
+            "verifying claims", extra={"report_id": str(report_id), "claim_count": len(claims)}
+        )
         _verify_claims(s, report, claims)  # imports the graph here: a broken one fails the report
         report.status, report.error = "done", None
         log.info("report done", extra={"report_id": str(report_id)})
@@ -321,8 +390,10 @@ def main(argv: list[str] | None = None) -> int:
     with Session(engine(), expire_on_commit=False) as s:
         company = s.scalar(select(Company).where(Company.ticker == a.ticker.upper()))
         if company is None:
-            print(f"unknown ticker {a.ticker}: run `make backfill TICKER={a.ticker}` first",
-                  file=sys.stderr)
+            print(
+                f"unknown ticker {a.ticker}: run `make backfill TICKER={a.ticker}` first",
+                file=sys.stderr,
+            )
             return 2
         report = Report(company_id=company.id, fiscal_year=a.fy, fiscal_period=a.fp)
         s.add(report)

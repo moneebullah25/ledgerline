@@ -12,15 +12,33 @@ from ledgerline.models import Claim
 from ledgerline.schemas import Citation, CriticOutput, EvidenceItem, VerdictDraft
 from ledgerline.tracing import Tracer
 
-CLAIM = Claim(id=7, company_id=1, fiscal_year=2025, fiscal_period="Q1", text="revenue of $94.9 billion",
-              span_start=0, span_end=1, claim_type="reported_result", filing_id=1, metric="revenue",
-              value=94.9e9, unit="USD", target_fiscal_year=2025, target_fiscal_period="Q1")
+CLAIM = Claim(
+    id=7,
+    company_id=1,
+    fiscal_year=2025,
+    fiscal_period="Q1",
+    text="revenue of $94.9 billion",
+    span_start=0,
+    span_end=1,
+    claim_type="reported_result",
+    filing_id=1,
+    metric="revenue",
+    value=94.9e9,
+    unit="USD",
+    target_fiscal_year=2025,
+    target_fiscal_period="Q1",
+)
 FACT = Citation(kind="xbrl_fact", ref_id=11, value=94_930e6, unit="USD")
 
 
 def ev(agent, stance, citations=(), **payload):
-    return EvidenceItem(agent=agent, stance=stance, summary=f"{agent} {stance}",
-                        citations=list(citations), payload=payload)
+    return EvidenceItem(
+        agent=agent,
+        stance=stance,
+        summary=f"{agent} {stance}",
+        citations=list(citations),
+        payload=payload,
+    )
 
 
 @pytest.fixture
@@ -30,13 +48,18 @@ def fakes(monkeypatch):
 
     def install(**by_agent):
         for name, item in by_agent.items():
-            monkeypatch.setitem(build.AGENTS, name, lambda s, c, ctx, lock, item=item: (item, OFFLINE))
+            monkeypatch.setitem(
+                build.AGENTS, name, lambda s, c, ctx, lock, item=item: (item, OFFLINE)
+            )
+
     return install
 
 
 def test_supported_numeric_claim_carries_fact_ids(fakes):
-    fakes(xbrl_table=ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]], tol_used=0.1),
-          filing_rag=ev("filing_rag", "insufficient"))
+    fakes(
+        xbrl_table=ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]], tol_used=0.1),
+        filing_rag=ev("filing_rag", "insufficient"),
+    )
     t = Tracer()
     r = build.verify_claim(None, CLAIM, t)
     assert r.verdict.label == "supported" and not r.refused
@@ -45,8 +68,15 @@ def test_supported_numeric_claim_carries_fact_ids(fakes):
     assert [e.agent for e in r.evidence] == ["xbrl_table", "filing_rag"]
     assert r.prompt_version.startswith("adjudicator-") and len(r.prompt_version) == 20
     names = {s.name for s in t.spans}
-    assert {"verify_claim", "router", "agent.xbrl_table", "agent.filing_rag", "refusal_check",
-            "critic", "adjudicator"} <= names
+    assert {
+        "verify_claim",
+        "router",
+        "agent.xbrl_table",
+        "agent.filing_rag",
+        "refusal_check",
+        "critic",
+        "adjudicator",
+    } <= names
     root = next(s for s in t.spans if s.name == "verify_claim")
     assert all(s.parent_id == root.id for s in t.spans if s.name.startswith("agent."))
 
@@ -62,11 +92,15 @@ def test_refusal_short_circuits_without_critic_or_adjudicator(fakes, monkeypatch
 
 
 def test_market_reaction_alone_cannot_prevent_refusal(fakes, monkeypatch):
-    monkeypatch.setattr(build, "context",
-                        lambda s, c: Ctx(1, "1", "AAPL", date(2025, 1, 30), None, Lock()))
+    monkeypatch.setattr(
+        build, "context", lambda s, c: Ctx(1, "1", "AAPL", date(2025, 1, 30), None, Lock())
+    )
     price = Citation(kind="price", ref_id=1, value=200.0)
-    fakes(xbrl_table=ev("xbrl_table", "insufficient"), filing_rag=ev("filing_rag", "insufficient"),
-          market_reaction=ev("market_reaction", "insufficient", [price], abnormal_return=-0.05))
+    fakes(
+        xbrl_table=ev("xbrl_table", "insufficient"),
+        filing_rag=ev("filing_rag", "insufficient"),
+        market_reaction=ev("market_reaction", "insufficient", [price], abnormal_return=-0.05),
+    )
     r = build.verify_claim(None, CLAIM, Tracer())
     assert r.refused and len(r.evidence) == 3
 
@@ -78,7 +112,9 @@ def test_agents_run_concurrently(fakes, monkeypatch):
         def run(s, c, ctx, lock):
             barrier.wait()
             return ev(name, stance), OFFLINE
+
         return run
+
     fakes()
     monkeypatch.setitem(build.AGENTS, "xbrl_table", agent("xbrl_table"))
     monkeypatch.setitem(build.AGENTS, "filing_rag", agent("filing_rag"))
@@ -86,16 +122,20 @@ def test_agents_run_concurrently(fakes, monkeypatch):
 
 
 def test_uncited_number_fails_closed(fakes, monkeypatch):
-    fakes(xbrl_table=ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]]),
-          filing_rag=ev("filing_rag", "insufficient"))
+    fakes(
+        xbrl_table=ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]]),
+        filing_rag=ev("filing_rag", "insufficient"),
+    )
     monkeypatch.setattr(adjudicator, "_describe", lambda c, e: "Revenue was 97.2 billion.")
     with pytest.raises(adjudicator.IntegrityError, match="uncited"):
         build.verify_claim(None, CLAIM, Tracer())
 
 
 def test_banned_vocabulary_fails_closed(fakes, monkeypatch):
-    fakes(xbrl_table=ev("xbrl_table", "contradicts", [FACT], periods=[[2025, "Q1"]]),
-          filing_rag=ev("filing_rag", "insufficient"))
+    fakes(
+        xbrl_table=ev("xbrl_table", "contradicts", [FACT], periods=[[2025, "Q1"]]),
+        filing_rag=ev("filing_rag", "insufficient"),
+    )
     monkeypatch.setattr(adjudicator, "_describe", lambda c, e: "The claim is misleading.")
     with pytest.raises(adjudicator.IntegrityError, match="banned"):
         build.verify_claim(None, CLAIM, Tracer())
@@ -133,12 +173,27 @@ def test_xbrl_dominates_numeric_and_dissent_lowers_confidence():
     assert v2.confidence < v1.confidence
 
 
-GUIDANCE = Claim(id=8, company_id=1, fiscal_year=2025, fiscal_period="Q1", claim_type="guidance",
-                 text="revenue between $89 billion and $93 billion", span_start=0, span_end=1,
-                 filing_id=1, metric="revenue", value=89e9, value_high=93e9, unit="USD",
-                 target_fiscal_year=2025, target_fiscal_period="Q2")
-FORECAST = [Citation(kind="forecast", ref_id=f"revenue:2025Q2:ensemble:{k}", value=v, unit="USD")
-            for k, v in (("point", 91e9), ("lo90", 86e9), ("hi90", 96e9))]
+GUIDANCE = Claim(
+    id=8,
+    company_id=1,
+    fiscal_year=2025,
+    fiscal_period="Q1",
+    claim_type="guidance",
+    text="revenue between $89 billion and $93 billion",
+    span_start=0,
+    span_end=1,
+    filing_id=1,
+    metric="revenue",
+    value=89e9,
+    value_high=93e9,
+    unit="USD",
+    target_fiscal_year=2025,
+    target_fiscal_period="Q2",
+)
+FORECAST = [
+    Citation(kind="forecast", ref_id=f"revenue:2025Q2:ensemble:{k}", value=v, unit="USD")
+    for k, v in (("point", 91e9), ("lo90", 86e9), ("hi90", 96e9))
+]
 CHUNK = Citation(kind="chunk", ref_id=3, quote="Net sales were $94.9 billion.")
 
 
@@ -146,16 +201,20 @@ def test_filing_rag_support_prevents_refusal_when_xbrl_is_insufficient(fakes, mo
     calls = []
     real = adjudicator.adjudicate
     monkeypatch.setattr(adjudicator, "adjudicate", lambda *a: calls.append(1) or real(*a))
-    fakes(xbrl_table=ev("xbrl_table", "insufficient"),
-          filing_rag=ev("filing_rag", "supports", [CHUNK], margin=0.9, section="MD&A"))
+    fakes(
+        xbrl_table=ev("xbrl_table", "insufficient"),
+        filing_rag=ev("filing_rag", "supports", [CHUNK], margin=0.9, section="MD&A"),
+    )
     r = build.verify_claim(None, CLAIM, Tracer())
     assert calls == [1] and not r.refused
     assert r.verdict.label == "supported" and r.verdict.confidence <= 0.6  # NLI on a number
 
 
 def test_forecast_only_guidance_is_capped_at_unverifiable(fakes):
-    fakes(forecast=ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5}, edge=0.4),
-          filing_rag=ev("filing_rag", "insufficient"))
+    fakes(
+        forecast=ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5}, edge=0.4),
+        filing_rag=ev("filing_rag", "insufficient"),
+    )
     r = build.verify_claim(None, GUIDANCE, Tracer())
     assert not r.refused and r.verdict.label == "unverifiable"
     assert {c.kind for c in r.verdict.citations} == {"forecast"}  # still visible
@@ -163,9 +222,17 @@ def test_forecast_only_guidance_is_capped_at_unverifiable(fakes):
 
 
 def test_qualitative_claim_through_the_graph(fakes):
-    claim = Claim(id=9, company_id=1, fiscal_year=2025, fiscal_period="Q1", filing_id=1,
-                  claim_type="qualitative", text="Services grew strongly", span_start=0,
-                  span_end=1)
+    claim = Claim(
+        id=9,
+        company_id=1,
+        fiscal_year=2025,
+        fiscal_period="Q1",
+        filing_id=1,
+        claim_type="qualitative",
+        text="Services grew strongly",
+        span_start=0,
+        span_end=1,
+    )
     quote = Citation(kind="chunk", ref_id=4, quote="Services grew strongly.")
     fakes(filing_rag=ev("filing_rag", "supports", [quote], margin=0.5, section="MD&A"))
     t = Tracer()
@@ -198,12 +265,16 @@ def online(monkeypatch):
         def structured(tier, system, data, instruction, schema):
             seen.append((instruction, data))
             return queue.pop(0), USAGE
+
         monkeypatch.setattr(llm, "structured", structured)
         return seen
+
     return install
 
 
-def V(label="supported", rationale="Supported by filed revenue of 94.93 billion USD.", cites=(FACT,)):
+def V(
+    label="supported", rationale="Supported by filed revenue of 94.93 billion USD.", cites=(FACT,)
+):
     return VerdictDraft(label=label, confidence=0.9, rationale=rationale, citations=list(cites))
 
 
@@ -228,8 +299,10 @@ def test_online_both_bad_falls_back_to_offline_with_usage(online):
 def test_online_fabricated_citation_value_is_replaced_and_caught(online):
     fake = Citation(kind="xbrl_fact", ref_id=11, value=97.2e9, unit="USD")
     unknown = Citation(kind="xbrl_fact", ref_id=999, value=1.0)
-    online(V(rationale="Filed revenue was 97.2 billion USD.", cites=[fake]),
-           V(cites=[fake, unknown, fake]))
+    online(
+        V(rationale="Filed revenue was 97.2 billion USD.", cites=[fake]),
+        V(cites=[fake, unknown, fake]),
+    )
     v, *_ = adjudicator.adjudicate(CLAIM, [XBRL], None)
     assert v.citations == [FACT]  # the evidence's copy; unknown dropped; deduped
 
@@ -237,8 +310,9 @@ def test_online_fabricated_citation_value_is_replaced_and_caught(online):
 def test_online_label_must_match_deciding_stance(online):
     seen = online(V(label="contradicted"), V(label="contradicted"))
     derived = ev("xbrl_table", "supports", [FACT], periods=[[2025, "Q1"]], derived=True)
-    online_critic = CriticOutput(counter_stance="contradicts", argument="Revenue was 97.2 billion.",
-                                 weakest_evidence="x")
+    online_critic = CriticOutput(
+        counter_stance="contradicts", argument="Revenue was 97.2 billion.", weakest_evidence="x"
+    )
     v, u, model = adjudicator.adjudicate(CLAIM, [derived], online_critic)
     assert len(seen) == 2 and "label mismatch" in seen[1][0]
     assert v.label == "supported" and "94.93 billion" in v.rationale  # offline rule
@@ -262,16 +336,20 @@ def test_online_fallback_integrity_error_carries_usage(online, monkeypatch):
 
 
 def test_online_forecast_only_must_be_unverifiable(online):
-    online(V(label="supported", cites=FORECAST[:1], rationale="Consistent with history."),
-           V(label="unverifiable", cites=FORECAST[:1], rationale="Consistent with history only."))
+    online(
+        V(label="supported", cites=FORECAST[:1], rationale="Consistent with history."),
+        V(label="unverifiable", cites=FORECAST[:1], rationale="Consistent with history only."),
+    )
     forecast = ev("forecast", "supports", FORECAST, mase={"ensemble": 0.5})
     v, *_ = adjudicator.adjudicate(GUIDANCE, [forecast], None)
     assert v.label == "unverifiable"
 
 
 def test_online_critic_retries_on_uncited_number_then_falls_back(online):
-    online(CriticOutput(counter_stance="contradicts", argument="Revenue was really 97.2 billion."),
-           CriticOutput(counter_stance="contradicts", argument="The fact is derived."))
+    online(
+        CriticOutput(counter_stance="contradicts", argument="Revenue was really 97.2 billion."),
+        CriticOutput(counter_stance="contradicts", argument="The fact is derived."),
+    )
     out, _ = critic.critique(CLAIM, [XBRL])
     assert out.argument == "The fact is derived."
     bad = CriticOutput(counter_stance="contradicts", argument="This is a lie.")
@@ -294,8 +372,11 @@ def test_judge_model_only_when_judgment_is_needed(online, monkeypatch):
 def test_offline_rationale_never_quotes_an_online_critic():
     # A live critic may cite another agent's number (a price move); the rule's verdict is
     # reported with model None, so it quotes only the offline critic.
-    loose = CriticOutput(counter_stance="contradicts", argument="Shares moved 8.4% after the release.",
-                         weakest_evidence="market_reaction:context")
+    loose = CriticOutput(
+        counter_stance="contradicts",
+        argument="Shares moved 8.4% after the release.",
+        weakest_evidence="market_reaction:context",
+    )
     v, _, model = adjudicator.adjudicate(CLAIM, [XBRL], loose)
     assert model is None and "8.4" not in v.rationale and "market_reaction" not in v.rationale
     assert v == adjudicator.adjudicate(CLAIM, [XBRL], None)[0]
@@ -310,15 +391,29 @@ def test_online_verdict_citing_only_unknown_evidence_is_rejected(online):
 
 
 def test_filing_rag_decision_calls_the_models_with_gating_live(online, monkeypatch):
-    rag = ev("filing_rag", "supports", [Citation(kind="chunk", ref_id=5, quote="Services grew.")],
-             margin=0.5, section="MD&A")
-    seen = online(CriticOutput(counter_stance="contradicts", argument="One passage only."),
-                  V(rationale="Supported by the passage.", cites=rag.citations))
+    rag = ev(
+        "filing_rag",
+        "supports",
+        [Citation(kind="chunk", ref_id=5, quote="Services grew.")],
+        margin=0.5,
+        section="MD&A",
+    )
+    seen = online(
+        CriticOutput(counter_stance="contradicts", argument="One passage only."),
+        V(rationale="Supported by the passage.", cites=rag.citations),
+    )
     monkeypatch.setattr(adjudicator, "needs_judgment", NEEDS_JUDGMENT)
     monkeypatch.setattr(critic, "needs_judgment", NEEDS_JUDGMENT)
-    qual = Claim(**{**{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
-                    "text": "Services grew", "claim_type": "qualitative", "metric": None,
-                    "value": None, "unit": None})
+    qual = Claim(
+        **{
+            **{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
+            "text": "Services grew",
+            "claim_type": "qualitative",
+            "metric": None,
+            "value": None,
+            "unit": None,
+        }
+    )
     assert adjudicator.needs_judgment(qual, [rag])
     out, _ = critic.critique(qual, [rag])
     v, _, model = adjudicator.adjudicate(qual, [rag], out)
@@ -339,9 +434,15 @@ def test_implausible_gap_refusal_says_why(fakes):
     from ledgerline.graph.agents.xbrl_table import assess
     from ledgerline.store.xbrl_query import Fact
 
-    eps = Claim(**{**{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
-                   "text": "Diluted EPS was $2.80", "metric": "eps_diluted", "value": 2.80,
-                   "unit": "USD/share"})
+    eps = Claim(
+        **{
+            **{c.key: getattr(CLAIM, c.key) for c in Claim.__table__.columns},
+            "text": "Diluted EPS was $2.80",
+            "metric": "eps_diluted",
+            "value": 2.80,
+            "unit": "USD/share",
+        }
+    )
     fact = Fact(11.39, "USD/share", (11,), "eps_diluted", 2025, "FY", None, False, "u", ())
     fakes(xbrl_table=assess(eps, [fact]), filing_rag=ev("filing_rag", "insufficient"))
     r = build.verify_claim(None, eps, Tracer())

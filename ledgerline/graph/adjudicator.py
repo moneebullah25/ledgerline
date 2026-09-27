@@ -40,7 +40,9 @@ from ledgerline.schemas import (
 
 TRUTH_AGENTS = ("xbrl_table", "forecast", "filing_rag")
 LABEL = {"supports": "supported", "contradicts": "contradicted"}
-BANNED = re.compile(r"\b(misleading\w*|false\w*|fraud\w*|lie|lies|lied|lying|liar\w*)\b", re.IGNORECASE)
+BANNED = re.compile(
+    r"\b(misleading\w*|false\w*|fraud\w*|lie|lies|lied|lying|liar\w*)\b", re.IGNORECASE
+)
 
 
 class IntegrityError(RuntimeError):
@@ -66,7 +68,11 @@ def decide(claim: Claim, evidence: list[EvidenceItem]) -> tuple[Stance, Evidence
     by = {e.agent: e for e in evidence}
     for name in TRUTH_AGENTS:  # dominance order
         e = by.get(name)
-        if e and e.stance != "insufficient" and (name != "forecast" or claim.claim_type == "guidance"):
+        if (
+            e
+            and e.stance != "insufficient"
+            and (name != "forecast" or claim.claim_type == "guidance")
+        ):
             return e.stance, e
     return "insufficient", None
 
@@ -89,8 +95,10 @@ def fmt(v: float, unit: str | None) -> str:
 def _describe(claim: Claim, e: EvidenceItem) -> str:
     verb = "is consistent with" if e.stance == "supports" else "is inconsistent with"
     if e.agent == "xbrl_table":
+
         def values(cs):
             return ", ".join(dict.fromkeys(fmt(c.value, c.unit) for c in cs))
+
         computed = [c for c in e.citations if c.kind == "computed"]
         tol = next((c for c in computed if str(c.ref_id).endswith(":tolerance")), None)
         change = [c for c in computed if str(c.ref_id).endswith("_change")]
@@ -98,8 +106,10 @@ def _describe(claim: Claim, e: EvidenceItem) -> str:
         periods = " and ".join(f"{fy} {fp}" for fy, fp in e.payload["periods"])
         kind = f"{claim.comparison} change" if change else "value"
         derived = " (derived from other filed facts)" if e.payload.get("derived") else ""
-        text = (f"Filed XBRL facts for {claim.metric}, {periods}: "
-                f"{values(c for c in e.citations if c.kind == 'xbrl_fact')}{derived}.")
+        text = (
+            f"Filed XBRL facts for {claim.metric}, {periods}: "
+            f"{values(c for c in e.citations if c.kind == 'xbrl_fact')}{derived}."
+        )
         if ratio:
             text += f" Computed {claim.metric}: {values(ratio)}."
         if change:
@@ -109,15 +119,21 @@ def _describe(claim: Claim, e: EvidenceItem) -> str:
         return text + f" The claimed {kind} {how} the rounding-aware tolerance{of}."
     if e.agent == "forecast":
         vals = {c.ref_id.rsplit(":", 1)[1]: fmt(c.value, c.unit) for c in e.citations}
-        return (f"The guided value {verb} the ninety-percent interval implied by quarterly "
-                f"history ({vals['lo90']} to {vals['hi90']}). This measures consistency with "
-                "history, not the eventual outcome, so on its own it does not verify the claim.")
-    return (f"A cited passage in {e.payload.get('section', 'the filings')} "
-            f"{'entails' if e.stance == 'supports' else 'contradicts'} the claim.")
+        return (
+            f"The guided value {verb} the ninety-percent interval implied by quarterly "
+            f"history ({vals['lo90']} to {vals['hi90']}). This measures consistency with "
+            "history, not the eventual outcome, so on its own it does not verify the claim."
+        )
+    return (
+        f"A cited passage in {e.payload.get('section', 'the filings')} "
+        f"{'entails' if e.stance == 'supports' else 'contradicts'} the claim."
+    )
 
 
 def adjudicate(
-    claim: Claim, evidence: list[EvidenceItem], critic: CriticOutput | None,
+    claim: Claim,
+    evidence: list[EvidenceItem],
+    critic: CriticOutput | None,
     offline: bool = False,
 ) -> tuple[VerdictDraft, llm.Usage, str | None]:
     """(verdict, spend, model that wrote the verdict; None for the offline rule).
@@ -136,6 +152,7 @@ def adjudicate(
 
 def _offline_critic(claim: Claim, evidence: list[EvidenceItem]) -> CriticOutput:
     from ledgerline.graph.critic import critique_offline  # critic imports this module
+
     return critique_offline(claim, evidence)
 
 
@@ -148,7 +165,9 @@ def needs_judgment(claim: Claim, evidence: list[EvidenceItem]) -> bool:
 
 
 def _adjudicate_offline(
-    claim: Claim, evidence: list[EvidenceItem], critic: CriticOutput | None,
+    claim: Claim,
+    evidence: list[EvidenceItem],
+    critic: CriticOutput | None,
 ) -> VerdictDraft:
     stance, e = decide(claim, evidence)
     if e is None:  # build.py refuses before this; reaching here is a wiring bug
@@ -161,13 +180,18 @@ def _adjudicate_offline(
         conf = 0.5 + 0.4 * e.payload.get("margin", 0.0)
         if claim.value is not None:
             conf = min(conf, 0.6)
-    dissent = [x for x in evidence if x.agent in TRUTH_AGENTS and x is not e
-               and x.stance not in ("insufficient", stance)]
+    dissent = [
+        x
+        for x in evidence
+        if x.agent in TRUTH_AGENTS and x is not e and x.stance not in ("insufficient", stance)
+    ]
     parts = [_describe(claim, e)]
     if dissent:
         conf -= 0.15
-        parts.append(f"The {', '.join(x.agent for x in dissent)} evidence points the other way; "
-                     f"the {e.agent} evidence takes precedence under the dominance rule.")
+        parts.append(
+            f"The {', '.join(x.agent for x in dissent)} evidence points the other way; "
+            f"the {e.agent} evidence takes precedence under the dominance rule."
+        )
     if critic and critic.weakest_evidence:
         conf -= 0.1
         parts.append(f"Critic: {critic.argument}")  # offline arguments carry no numbers
@@ -176,15 +200,21 @@ def _adjudicate_offline(
     cites = list(e.citations)
     if problems := audit(rationale, cites, claim.text):
         raise IntegrityError(f"offline rationale failed audit: {problems}")
-    return VerdictDraft(label=label, confidence=round(min(max(conf, 0.05), 0.99), 3),
-                        rationale=rationale, citations=cites)
+    return VerdictDraft(
+        label=label,
+        confidence=round(min(max(conf, 0.05), 0.99), 3),
+        rationale=rationale,
+        citations=cites,
+    )
 
 
 def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, str | None]:
     system, _ = load_prompt("adjudicator")
-    data = {"claim": claim.text,
-            "evidence": json.dumps([e.model_dump() for e in evidence]),
-            "critic": critic.model_dump_json() if critic else "none"}
+    data = {
+        "claim": claim.text,
+        "evidence": json.dumps([e.model_dump() for e in evidence]),
+        "critic": critic.model_dump_json() if critic else "none",
+    }
     known = {(c.kind, str(c.ref_id)): c for e in evidence for c in e.citations}
     want = expected_label(claim, evidence)
     instruction = "Adjudicate the claim."
@@ -205,9 +235,11 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
         # A6: problem details quote model output, so they go in a data block, not the instruction.
         kinds = sorted({p.split(":")[0] for p in problems})
         data = data | {"rejected_answer_problems": json.dumps(problems)}
-        instruction = (f"Adjudicate the claim. Your previous answer was rejected for "
-                       f"{len(problems)} problem(s) of kind {', '.join(kinds)}; the "
-                       "rejected_answer_problems document lists them.")
+        instruction = (
+            f"Adjudicate the claim. Your previous answer was rejected for "
+            f"{len(problems)} problem(s) of kind {', '.join(kinds)}; the "
+            "rejected_answer_problems document lists them."
+        )
     # A3 and FR-45: after the retry, a wrong label or a rationale that still fails the audit
     # falls back to the rule's verdict, whose templated rationale is audited below. The
     # online critic's argument is unaudited against those citations, so the offline critic
@@ -221,6 +253,10 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
 
 
 def add_usage(a: llm.Usage, b: llm.Usage) -> llm.Usage:
-    return llm.Usage(b.model, a.input_tokens + b.input_tokens, a.output_tokens + b.output_tokens,
-                     a.cache_read_tokens + b.cache_read_tokens,
-                     a.cache_write_tokens + b.cache_write_tokens)
+    return llm.Usage(
+        b.model,
+        a.input_tokens + b.input_tokens,
+        a.output_tokens + b.output_tokens,
+        a.cache_read_tokens + b.cache_read_tokens,
+        a.cache_write_tokens + b.cache_write_tokens,
+    )

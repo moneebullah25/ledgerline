@@ -61,12 +61,16 @@ def forecast_all(y: np.ndarray, h: int) -> dict[str, tuple[np.ndarray, np.ndarra
     from statsforecast.models import AutoARIMA, AutoETS, SeasonalNaive
 
     out = {}
-    for name, m in (("snaive", SeasonalNaive(SEASON)), ("ets", AutoETS(season_length=SEASON)),
-                    ("arima", AutoARIMA(season_length=SEASON))):
+    for name, m in (
+        ("snaive", SeasonalNaive(SEASON)),
+        ("ets", AutoETS(season_length=SEASON)),
+        ("arima", AutoARIMA(season_length=SEASON)),
+    ):
         f = m.forecast(y=y, h=h, level=[90])
         out[name] = tuple(np.asarray(f[k], dtype=float) for k in ("mean", "lo-90", "hi-90"))
-    q, _ = _chronos().predict_quantiles(torch.tensor(y, dtype=torch.float32), prediction_length=h,
-                                        quantile_levels=[0.1, 0.5, 0.9])
+    q, _ = _chronos().predict_quantiles(
+        torch.tensor(y, dtype=torch.float32), prediction_length=h, quantile_levels=[0.1, 0.5, 0.9]
+    )
     q10, q50, q90 = (q[0, :, i].numpy().astype(float) for i in range(3))
     out["chronos"] = (q50, q50 - (q50 - q10) * _Z95_OVER_Z90, q50 + (q90 - q50) * _Z95_OVER_Z90)
     out["ensemble"] = tuple(np.mean([out[n][i] for n in ENSEMBLE], axis=0) for i in range(3))
@@ -119,8 +123,9 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, U
     with lock:
         series = get_series(s, ctx.cik, claim.metric, "Q")
     known = period_key(claim.fiscal_year, claim.fiscal_period)
-    hist = contiguous_tail([f for f in series
-                            if period_key(f.fiscal_year, f.fiscal_period) <= known])
+    hist = contiguous_tail(
+        [f for f in series if period_key(f.fiscal_year, f.fiscal_period) <= known]
+    )
     return assess(claim, hist), OFFLINE
 
 
@@ -129,13 +134,15 @@ def assess(claim: Claim, hist: list[Fact]) -> EvidenceItem:
     if not hist:
         return _insufficient("no quarterly XBRL history for this metric")
     h = _qi(claim.target_fiscal_year, claim.target_fiscal_period) - _qi(
-        hist[-1].fiscal_year, hist[-1].fiscal_period)
+        hist[-1].fiscal_year, hist[-1].fiscal_period
+    )
     if not 1 <= h <= MAX_H:
         return _insufficient(f"guidance horizon of {h} quarters is outside 1..{MAX_H}")
     y = np.array([f.value for f in hist])
     if len(y) < HOLDOUT + MIN_TRAIN + h - 1:
-        return _insufficient("quarterly history too short for a held-out skill check",
-                             history_len=len(y))
+        return _insufficient(
+            "quarterly history too short for a held-out skill check", history_len=len(y)
+        )
     unit = CONCEPTS[claim.metric].unit
     if claim.unit not in ((unit,) if claim.comparison is None else ("percent", unit)):
         return _insufficient(f"claim unit {claim.unit} does not match {claim.metric}")
@@ -152,19 +159,35 @@ def assess(claim: Claim, hist: list[Fact]) -> EvidenceItem:
     f = forecast_all(y, h)["ensemble"]
     point, flo, fhi = (float(a[-1]) for a in f)
     ref = f"{claim.metric}:{claim.target_fiscal_year}{claim.target_fiscal_period}:ensemble"
-    cites = [Citation(kind="forecast", ref_id=f"{ref}:{k}", value=v, unit=unit)
-             for k, v in (("point", point), ("lo90", flo), ("hi90", fhi))]
-    payload = {"mase": skill, "horizon": h, "history_len": len(y), "point": point,
-               "lo90": flo, "hi90": fhi, "guided_low": lo, "guided_high": hi}
+    cites = [
+        Citation(kind="forecast", ref_id=f"{ref}:{k}", value=v, unit=unit)
+        for k, v in (("point", point), ("lo90", flo), ("hi90", fhi))
+    ]
+    payload = {
+        "mase": skill,
+        "horizon": h,
+        "history_len": len(y),
+        "point": point,
+        "lo90": flo,
+        "hi90": fhi,
+        "guided_low": lo,
+        "guided_high": hi,
+    }
     if skill["ensemble"] >= 1.0:
-        return EvidenceItem(agent="forecast", stance="insufficient", citations=cites,
-                            payload=payload,
-                            summary="ensemble does not beat seasonal naive on held-out quarters")
+        return EvidenceItem(
+            agent="forecast",
+            stance="insufficient",
+            citations=cites,
+            payload=payload,
+            summary="ensemble does not beat seasonal naive on held-out quarters",
+        )
     mid = (lo + hi) / 2
     inside = flo <= mid <= fhi
     return EvidenceItem(
-        agent="forecast", stance="supports" if inside else "contradicts", citations=cites,
+        agent="forecast",
+        stance="supports" if inside else "contradicts",
+        citations=cites,
         payload=payload | {"edge": min(abs(mid - flo), abs(fhi - mid)) / max(fhi - flo, 1e-12)},
         summary=f"Guided value is {'inside' if inside else 'outside'} the 90% interval "
-                "implied by quarterly history.",
+        "implied by quarterly history.",
     )

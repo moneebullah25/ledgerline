@@ -24,9 +24,14 @@ def load_weights(path: Path = DEFAULT_PATH) -> SeverityWeights:
     return SeverityWeights(label=cfg["label"], **cfg["weights"])
 
 
-def severity(verdict_label: str, confidence: float, deviation: float | None,
-             hedging_score: float, abnormal_return: float | None,
-             weights: SeverityWeights) -> float:
+def severity(
+    verdict_label: str,
+    confidence: float,
+    deviation: float | None,
+    hedging_score: float,
+    abnormal_return: float | None,
+    weights: SeverityWeights,
+) -> float:
     """deviation is the relative error |claimed - filed| / |filed| from the XBRL agent;
     abnormal_return is the market agent's event-window abnormal return. Either is None
     when that agent had nothing to say, which contributes 0 rather than a guess."""

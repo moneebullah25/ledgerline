@@ -20,26 +20,69 @@ def co(db):
     return c
 
 
-def add(db, co, tag, value, start, end, fy, fp, *, unit="USD", accn="a1", form="10-Q",
-        filed="2025-02-01", derived=False):
+def add(
+    db,
+    co,
+    tag,
+    value,
+    start,
+    end,
+    fy,
+    fp,
+    *,
+    unit="USD",
+    accn="a1",
+    form="10-Q",
+    filed="2025-02-01",
+    derived=False,
+):
     start = date.fromisoformat(start) if start else None
     end = date.fromisoformat(end)
     row = XbrlFact(
-        company_id=co.id, tag=f"us-gaap:{tag}", unit=unit, value=value, period_start=start,
-        period_end=end, duration_days=(end - start).days if start else None, fiscal_year=fy,
-        fiscal_period=fp, form=form, accession_no=accn, filed=date.fromisoformat(filed),
-        derived=derived, source_url=f"https://sec.example/{accn}", fetched_at=datetime.now(UTC),
-        sha256="0" * 64, license_note="test")
+        company_id=co.id,
+        tag=f"us-gaap:{tag}",
+        unit=unit,
+        value=value,
+        period_start=start,
+        period_end=end,
+        duration_days=(end - start).days if start else None,
+        fiscal_year=fy,
+        fiscal_period=fp,
+        form=form,
+        accession_no=accn,
+        filed=date.fromisoformat(filed),
+        derived=derived,
+        source_url=f"https://sec.example/{accn}",
+        fetched_at=datetime.now(UTC),
+        sha256="0" * 64,
+        license_note="test",
+    )
     db.add(row)
     db.flush()
     return row.id
 
 
 def test_quarter_ignores_ytd_and_prefers_first_tag(db, co):
-    ytd = add(db, co, "RevenueFromContractWithCustomerExcludingAssessedTax", 180,
-              "2024-09-29", "2025-03-29", 2025, "Q2")
-    q = add(db, co, "RevenueFromContractWithCustomerExcludingAssessedTax", 80,
-            "2024-12-29", "2025-03-29", 2025, "Q2")
+    ytd = add(
+        db,
+        co,
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        180,
+        "2024-09-29",
+        "2025-03-29",
+        2025,
+        "Q2",
+    )
+    q = add(
+        db,
+        co,
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        80,
+        "2024-12-29",
+        "2025-03-29",
+        2025,
+        "Q2",
+    )
     add(db, co, "Revenues", 81, "2024-12-29", "2025-03-29", 2025, "Q2")
     f = get_xbrl_fact(db, CIK, "revenue", 2025, "Q2")
     assert (f.value, f.fact_ids, f.unit, f.derived) == (80.0, (q,), "USD", False)
@@ -60,28 +103,64 @@ def test_fy_returns_twelve_month_value(db, co):
 
 def test_original_beats_amendment_and_filed_beats_derived(db, co):
     orig = add(db, co, "NetIncomeLoss", 10, "2024-09-29", "2024-12-28", 2025, "Q1")
-    add(db, co, "NetIncomeLoss", 11, "2024-09-29", "2024-12-28", 2025, "Q1", accn="a1x",
-        form="10-Q/A", filed="2025-06-01")
+    add(
+        db,
+        co,
+        "NetIncomeLoss",
+        11,
+        "2024-09-29",
+        "2024-12-28",
+        2025,
+        "Q1",
+        accn="a1x",
+        form="10-Q/A",
+        filed="2025-06-01",
+    )
     assert get_xbrl_fact(db, CIK, "net_income", 2025, "Q1").fact_ids == (orig,)
 
 
 def test_instant_cash_answers_quarter_and_year_end(db, co):
     q2 = add(db, co, "CashAndCashEquivalentsAtCarryingValue", 7, None, "2025-03-29", 2025, "Q2")
-    ye = add(db, co, "CashAndCashEquivalentsAtCarryingValue", 9, None, "2025-09-27", 2025, "FY",
-             accn="k")
+    ye = add(
+        db, co, "CashAndCashEquivalentsAtCarryingValue", 9, None, "2025-09-27", 2025, "FY", accn="k"
+    )
     assert get_xbrl_fact(db, CIK, "cash", 2025, "Q2").fact_ids == (q2,)
     assert get_xbrl_fact(db, CIK, "cash", 2025, "Q4").fact_ids == (ye,)
     assert get_xbrl_fact(db, CIK, "cash", 2025, "FY").fact_ids == (ye,)
 
 
 def test_derived_margin_and_fcf_carry_component_ids(db, co):
-    r = add(db, co, "RevenueFromContractWithCustomerExcludingAssessedTax", 200,
-            "2024-09-29", "2024-12-28", 2025, "Q1")
+    r = add(
+        db,
+        co,
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        200,
+        "2024-09-29",
+        "2024-12-28",
+        2025,
+        "Q1",
+    )
     g = add(db, co, "GrossProfit", 90, "2024-09-29", "2024-12-28", 2025, "Q1")
-    o = add(db, co, "NetCashProvidedByUsedInOperatingActivities", 30, "2024-09-29", "2024-12-28",
-            2025, "Q1")
-    c = add(db, co, "PaymentsToAcquirePropertyPlantAndEquipment", 4, "2024-09-29", "2024-12-28",
-            2025, "Q1")
+    o = add(
+        db,
+        co,
+        "NetCashProvidedByUsedInOperatingActivities",
+        30,
+        "2024-09-29",
+        "2024-12-28",
+        2025,
+        "Q1",
+    )
+    c = add(
+        db,
+        co,
+        "PaymentsToAcquirePropertyPlantAndEquipment",
+        4,
+        "2024-09-29",
+        "2024-12-28",
+        2025,
+        "Q1",
+    )
     gm = get_xbrl_fact(db, CIK, "gross_margin", 2025, "Q1")
     assert (gm.value, gm.unit, gm.fact_ids, gm.derived) == (45.0, "percent", (g, r), False)
     assert [(x.value, x.unit) for x in gm.components] == [(90.0, "USD"), (200.0, "USD")]
@@ -90,8 +169,16 @@ def test_derived_margin_and_fcf_carry_component_ids(db, co):
 
 
 def test_none_paths(db, co):
-    add(db, co, "RevenueFromContractWithCustomerExcludingAssessedTax", 0,
-        "2024-09-29", "2024-12-28", 2025, "Q1")
+    add(
+        db,
+        co,
+        "RevenueFromContractWithCustomerExcludingAssessedTax",
+        0,
+        "2024-09-29",
+        "2024-12-28",
+        2025,
+        "Q1",
+    )
     add(db, co, "GrossProfit", 5, "2024-09-29", "2024-12-28", 2025, "Q1")
     add(db, co, "NetIncomeLoss", 100, "2024-09-29", "2025-03-29", 2025, "Q2")  # YTD only
     assert get_xbrl_fact(db, CIK, "gross_margin", 2025, "Q1") is None  # zero denominator

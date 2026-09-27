@@ -44,8 +44,9 @@ def test_healthz(client):
 @pytest.mark.db
 def test_post_enqueues_without_running(client, db):
     seed_report(db, n_claims=0)
-    r = client.post("/v1/reports", json={"ticker": "aapl", "fiscal_year": 2025,
-                                         "fiscal_period": "Q4"})
+    r = client.post(
+        "/v1/reports", json={"ticker": "aapl", "fiscal_year": 2025, "fiscal_period": "Q4"}
+    )
     assert r.status_code == 202
     report = db.get(Report, uuid.UUID(r.json()["job_id"]))
     assert report.status == "queued"
@@ -80,11 +81,13 @@ def test_post_rerun_recomputes_a_done_report(client, db):
 def test_post_caps_the_queue(client, db, monkeypatch):
     seed_report(db, n_claims=0)
     monkeypatch.setattr(api, "MAX_QUEUED", 1)
-    ok = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
-                                          "fiscal_period": "Q1"})
+    ok = client.post(
+        "/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1"}
+    )
     assert ok.status_code == 202
-    r = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
-                                         "fiscal_period": "Q2"})
+    r = client.post(
+        "/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q2"}
+    )
     assert r.status_code == 429 and r.headers["Retry-After"]
 
 
@@ -93,11 +96,18 @@ def test_post_caps_pending_per_key(client, db, monkeypatch):
     seed_report(db, n_claims=0)
     monkeypatch.setattr(settings(), "max_pending_reports", 1)
     # One queued report now exists (status=done from seed_report — add a queued one).
-    db.add(Report(company_id=db.query(Company.id).scalar(), fiscal_year=2025,
-                  fiscal_period="Q1", status="queued"))
+    db.add(
+        Report(
+            company_id=db.query(Company.id).scalar(),
+            fiscal_year=2025,
+            fiscal_period="Q1",
+            status="queued",
+        )
+    )
     db.flush()
-    r = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
-                                         "fiscal_period": "Q2"})
+    r = client.post(
+        "/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q2"}
+    )
     assert r.status_code == 429
     assert r.json()["detail"] == "too many pending reports"
     assert r.headers["Retry-After"]
@@ -110,7 +120,9 @@ def test_post_requires_api_key(client, db, monkeypatch):
     assert client.post("/v1/reports", json=body, headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.post("/v1/reports", json=body, headers={"X-API-Key": ""}).status_code == 401
     monkeypatch.delenv("LEDGERLINE_API_KEY")
-    monkeypatch.setattr(settings(), "api_key", None)  # a key in the developer's .env must not leak in
+    monkeypatch.setattr(
+        settings(), "api_key", None
+    )  # a key in the developer's .env must not leak in
     assert client.post("/v1/reports", json=body).status_code == 503  # fail closed
     assert client.get("/v1/reports").status_code == 200  # reads stay public
 
@@ -118,18 +130,25 @@ def test_post_requires_api_key(client, db, monkeypatch):
 @pytest.mark.db
 def test_post_rejects_fy_with_a_reason(client, db):
     seed_report(db, n_claims=0)
-    r = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
-                                         "fiscal_period": "FY"})
+    r = client.post(
+        "/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "FY"}
+    )
     assert _is_422_list(r) and "request Q4" in r.json()["detail"][0]["msg"]
 
 
 @pytest.mark.db
-@pytest.mark.parametrize("body, code", [
-    ({"ticker": "NOPE", "fiscal_year": 2025, "fiscal_period": "Q1"}, 404),
-    ({"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q5"}, 422),
-    ({"ticker": "AAPL'; DROP TABLE report;--", "fiscal_year": 2025, "fiscal_period": "Q1"}, 422),
-    ({"ticker": "AAPL", "fiscal_period": "Q1"}, 422),
-])
+@pytest.mark.parametrize(
+    "body, code",
+    [
+        ({"ticker": "NOPE", "fiscal_year": 2025, "fiscal_period": "Q1"}, 404),
+        ({"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q5"}, 422),
+        (
+            {"ticker": "AAPL'; DROP TABLE report;--", "fiscal_year": 2025, "fiscal_period": "Q1"},
+            422,
+        ),
+        ({"ticker": "AAPL", "fiscal_period": "Q1"}, 422),
+    ],
+)
 def test_post_validation(client, body, code):
     assert client.post("/v1/reports", json=body).status_code == code
 
@@ -153,8 +172,9 @@ def test_list_reports_keyset_pagination(client, db):
     db.flush()
     seen, cursor = [], None
     while True:
-        page = client.get("/v1/reports", params={"limit": 3, **({"cursor": cursor} if cursor
-                                                                 else {})}).json()
+        page = client.get(
+            "/v1/reports", params={"limit": 3, **({"cursor": cursor} if cursor else {})}
+        ).json()
         seen += [r["id"] for r in page["items"]]
         if not (cursor := page["next_cursor"]):
             break
@@ -200,23 +220,32 @@ def test_evals_latest_one_per_layer_and_name(client, db):
     from datetime import UTC, datetime, timedelta
 
     t = datetime.now(UTC)
-    db.add_all([
-        EvalRun(layer="L2", metrics={"contradiction_precision": 0.61}, created_at=t - timedelta(1)),
-        EvalRun(layer="L2", metrics={"contradiction_precision": 0.72}, created_at=t),
-        EvalRun(layer="L1", name="wer", metrics={"wer": 0.09}, created_at=t),
-        EvalRun(layer="L1", name="ner", metrics={"f1": 0.8}, created_at=t - timedelta(1)),
-        EvalRun(layer="L1", name="ner", metrics={"f1": 0.9}, created_at=t),
-    ])
+    db.add_all(
+        [
+            EvalRun(
+                layer="L2", metrics={"contradiction_precision": 0.61}, created_at=t - timedelta(1)
+            ),
+            EvalRun(layer="L2", metrics={"contradiction_precision": 0.72}, created_at=t),
+            EvalRun(layer="L1", name="wer", metrics={"wer": 0.09}, created_at=t),
+            EvalRun(layer="L1", name="ner", metrics={"f1": 0.8}, created_at=t - timedelta(1)),
+            EvalRun(layer="L1", name="ner", metrics={"f1": 0.9}, created_at=t),
+        ]
+    )
     db.flush()
     runs = {(r["layer"], r["name"]): r["metrics"] for r in client.get("/v1/evals/latest").json()}
-    assert runs == {("L1", "ner"): {"f1": 0.9}, ("L1", "wer"): {"wer": 0.09},
-                    ("L2", "L2"): {"contradiction_precision": 0.72}}  # name defaults to layer
+    assert runs == {
+        ("L1", "ner"): {"f1": 0.9},
+        ("L1", "wer"): {"wer": 0.09},
+        ("L2", "L2"): {"contradiction_precision": 0.72},
+    }  # name defaults to layer
 
 
 @pytest.mark.db
 @pytest.mark.perf
-@pytest.mark.skipif(not os.environ.get("LEDGERLINE_PERF"),
-                    reason="perf: timing-sensitive; run with LEDGERLINE_PERF=1 pytest -m perf")
+@pytest.mark.skipif(
+    not os.environ.get("LEDGERLINE_PERF"),
+    reason="perf: timing-sensitive; run with LEDGERLINE_PERF=1 pytest -m perf",
+)
 def test_nfr2_report_p95(client, db):
     """NFR-2: GET /v1/reports/{id} p95 <= 300 ms on a populated report (40 claims), measured
     in-process through the full ASGI stack against the local Postgres."""
@@ -229,15 +258,18 @@ def test_nfr2_report_p95(client, db):
         assert client.get(url).status_code == 200
         times.append((time.perf_counter() - t0) * 1000)
     p95 = statistics.quantiles(times, n=100)[94]
-    print(f"\nNFR-2 GET /v1/reports/{{id}} 40 claims, n=200: "
-          f"p50={statistics.median(times):.1f} ms p95={p95:.1f} ms")
+    print(
+        f"\nNFR-2 GET /v1/reports/{{id}} 40 claims, n=200: "
+        f"p50={statistics.median(times):.1f} ms p95={p95:.1f} ms"
+    )
     assert p95 <= 300
 
 
 @pytest.mark.db
 def test_healthz_is_json_503_when_the_db_is_down(client):
-    dead = create_engine("postgresql+psycopg://nobody@127.0.0.1:1/none",
-                         connect_args={"connect_timeout": 1})
+    dead = create_engine(
+        "postgresql+psycopg://nobody@127.0.0.1:1/none", connect_args={"connect_timeout": 1}
+    )
     app.dependency_overrides[get_session] = lambda: Session(dead)
     r = client.get("/healthz")
     assert r.status_code == 503 and r.json()["status"] == "unavailable"
@@ -270,13 +302,23 @@ def test_claim_detail_shows_only_a_done_reports_verdict(client, db):
     a claim no done report verified has none."""
     done = seed_report(db, n_claims=1)
     claim = db.query(Claim).one()
-    running = Report(company_id=done.company_id, fiscal_year=2025, fiscal_period="Q3",
-                     status="running")
+    running = Report(
+        company_id=done.company_id, fiscal_year=2025, fiscal_period="Q3", status="running"
+    )
     db.add(running)
     db.flush()
-    db.add(Verdict(report_id=running.id, claim_id=claim.id, label="supported", confidence=0.5,
-                   rationale="partial", citations=[], prompt_version="v1",
-                   trace_id=uuid.uuid4()))
+    db.add(
+        Verdict(
+            report_id=running.id,
+            claim_id=claim.id,
+            label="supported",
+            confidence=0.5,
+            rationale="partial",
+            citations=[],
+            prompt_version="v1",
+            trace_id=uuid.uuid4(),
+        )
+    )
     db.flush()
     body = client.get(f"/v1/claims/{claim.id}").json()
     assert body["verdict"]["report_id"] == str(done.id)
@@ -300,26 +342,38 @@ def test_failed_report_shows_its_error(client, db):
 @pytest.mark.db
 def test_401_names_the_auth_scheme(client, db):
     seed_report(db, n_claims=0)
-    r = client.post("/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025,
-                                         "fiscal_period": "Q1"}, headers={"X-API-Key": "no"})
+    r = client.post(
+        "/v1/reports",
+        json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1"},
+        headers={"X-API-Key": "no"},
+    )
     assert r.status_code == 401 and r.headers["WWW-Authenticate"] == "X-API-Key"
 
 
 @pytest.mark.db
-@pytest.mark.parametrize("body", [
-    {"ticker": "AAPL", "fiscal_year": "2025", "fiscal_period": "Q1"},  # strict: no coercion
-    {"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1", "rerun": "true"},
-    {"ticker": "AAPL", "fiscal_year": 2025.0, "fiscal_period": "Q1"},
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"ticker": "AAPL", "fiscal_year": "2025", "fiscal_period": "Q1"},  # strict: no coercion
+        {"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1", "rerun": "true"},
+        {"ticker": "AAPL", "fiscal_year": 2025.0, "fiscal_period": "Q1"},
+    ],
+)
 def test_post_is_strict(client, db, body):
     seed_report(db, n_claims=0)
     assert _is_422_list(client.post("/v1/reports", json=body))
 
 
-@pytest.mark.parametrize("fy, fp, ok", [
-    # FY2027 can end in January 2027, so its Q2 may have ended by July 2026; Q3 not before October.
-    (2025, "Q4", True), (2027, "Q2", True), (2027, "Q3", False), (2028, "Q1", False),
-])
+@pytest.mark.parametrize(
+    "fy, fp, ok",
+    [
+        # FY2027 can end in January 2027, so its Q2 may have ended by July 2026; Q3 not before October.
+        (2025, "Q4", True),
+        (2027, "Q2", True),
+        (2027, "Q3", False),
+        (2028, "Q1", False),
+    ],
+)
 def test_future_quarters_are_rejected(monkeypatch, fy, fp, ok):
     class Today(datetime):
         @classmethod

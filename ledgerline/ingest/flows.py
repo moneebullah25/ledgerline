@@ -33,23 +33,30 @@ def guarded(flow_name: str, key: str, fn: Callable[..., int], *args) -> int | No
 
 
 def run_filings(tickers: list[str], quarters: int = 6) -> dict[str, int | None]:
-    return {t: guarded("ingest_edgar_filings", t, edgar.ingest_filings, t, quarters) for t in tickers}
+    return {
+        t: guarded("ingest_edgar_filings", t, edgar.ingest_filings, t, quarters) for t in tickers
+    }
 
 
 def run_facts(tickers: list[str]) -> dict[str, int | None]:
     return {t: guarded("ingest_xbrl_facts", t, xbrl.ingest_xbrl_facts, t) for t in tickers}
 
 
-def run_prices(tickers: list[str], start: date | None = None,
-               end: date | None = None) -> dict[str, int | None]:
+def run_prices(
+    tickers: list[str], start: date | None = None, end: date | None = None
+) -> dict[str, int | None]:
     end = end or datetime.now(UTC).date()
     start = start or end - timedelta(days=365 * PRICE_YEARS)
-    return {t: guarded("ingest_market_data", t, market.ingest_market_data, t, start, end)
-            for t in dict.fromkeys([*tickers, market.BENCHMARK])}
+    return {
+        t: guarded("ingest_market_data", t, market.ingest_market_data, t, start, end)
+        for t in dict.fromkeys([*tickers, market.BENCHMARK])
+    }
 
 
 @flow(name="ingest_edgar_filings")
-def ingest_edgar_filings(tickers: list[str] | None = None, quarters: int = 6) -> dict[str, int | None]:
+def ingest_edgar_filings(
+    tickers: list[str] | None = None, quarters: int = 6
+) -> dict[str, int | None]:
     return run_filings(tickers or list(UNIVERSE), quarters)
 
 
@@ -59,25 +66,41 @@ def ingest_xbrl_facts(tickers: list[str] | None = None) -> dict[str, int | None]
 
 
 @flow(name="ingest_market_data")
-def ingest_market_data(tickers: list[str] | None = None, start: date | None = None,
-                       end: date | None = None) -> dict[str, int | None]:
+def ingest_market_data(
+    tickers: list[str] | None = None, start: date | None = None, end: date | None = None
+) -> dict[str, int | None]:
     return run_prices(tickers or list(UNIVERSE), start, end)
 
 
 @flow(name="ingest_call_audio")
-def ingest_call_audio(path_or_url: str, kind: str, ticker: str | None = None,
-                      event_date: date | None = None, license_note: str = "",
-                      fiscal_year: int | None = None,
-                      fiscal_period: str | None = None) -> int | None:
+def ingest_call_audio(
+    path_or_url: str,
+    kind: str,
+    ticker: str | None = None,
+    event_date: date | None = None,
+    license_note: str = "",
+    fiscal_year: int | None = None,
+    fiscal_period: str | None = None,
+) -> int | None:
     """fiscal_year/fiscal_period tie an earnings call to its report quarter (the pipeline
     selects calls by them)."""
     from ledgerline.ingest import call_audio  # owned by S2; imported late on purpose
 
     def run(s):
-        company_id = s.scalar(select(Company.id).where(Company.ticker == ticker)) if ticker else None
-        return call_audio.ingest_call_audio(s, path_or_url, kind=kind, company_id=company_id,
-                                            event_date=event_date, license_note=license_note,
-                                            fiscal_year=fiscal_year, fiscal_period=fiscal_period)
+        company_id = (
+            s.scalar(select(Company.id).where(Company.ticker == ticker)) if ticker else None
+        )
+        return call_audio.ingest_call_audio(
+            s,
+            path_or_url,
+            kind=kind,
+            company_id=company_id,
+            event_date=event_date,
+            license_note=license_note,
+            fiscal_year=fiscal_year,
+            fiscal_period=fiscal_period,
+        )
+
     return guarded("ingest_call_audio", path_or_url, run)
 
 
@@ -85,5 +108,6 @@ def ingest_call_audio(path_or_url: str, kind: str, ticker: str | None = None,
 def ingest_fomc_eval_set(dates: list[str]) -> int | None:
     from ledgerline.ingest import fomc  # owned by S2; imported late on purpose
 
-    return guarded("ingest_fomc_eval_set", ",".join(dates),
-                   lambda s: len(fomc.ingest_fomc_eval_set(s, dates)))
+    return guarded(
+        "ingest_fomc_eval_set", ",".join(dates), lambda s: len(fomc.ingest_fomc_eval_set(s, dates))
+    )

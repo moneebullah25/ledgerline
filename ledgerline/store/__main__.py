@@ -28,8 +28,11 @@ def explain(query: str = "total net sales for the quarter") -> None:
     runs = [
         ("hnsw, unfiltered", _DENSE, ["SET LOCAL hnsw.ef_search = 100"]),
         ("seqscan, unfiltered", _DENSE, ["SET LOCAL enable_indexscan = off"]),
-        ("search() dense leg, company filter", _FILTERED,
-         ["SET LOCAL hnsw.ef_search = 100", "SET LOCAL hnsw.iterative_scan = strict_order"]),
+        (
+            "search() dense leg, company filter",
+            _FILTERED,
+            ["SET LOCAL hnsw.ef_search = 100", "SET LOCAL hnsw.iterative_scan = strict_order"],
+        ),
     ]
     for label, sql, setup in runs:
         with session() as s:  # SET LOCAL ends with the transaction
@@ -56,17 +59,29 @@ def verify_offsets(s: Session) -> int:
             print(f"{kind} {rid} ({where}) [{a}:{b}] does not match")
 
     segments = dict(s.execute(select(Segment.id, Segment.text)).all())
-    for seg_id, cid, a, b, t in s.execute(select(
-            Claim.segment_id, Claim.id, Claim.span_start, Claim.span_end, Claim.text)
-            .where(Claim.segment_id.is_not(None))):
+    for seg_id, cid, a, b, t in s.execute(
+        select(Claim.segment_id, Claim.id, Claim.span_start, Claim.span_end, Claim.text).where(
+            Claim.segment_id.is_not(None)
+        )
+    ):
         check("claim", cid, f"segment {seg_id}", segments[seg_id], a, b, t)
     for filing in s.scalars(select(Filing).order_by(Filing.id)):
-        rows = [("chunk", *r) for r in s.execute(select(
-            Chunk.id, Chunk.char_start, Chunk.char_end, Chunk.text)
-            .where(Chunk.filing_id == filing.id))]
-        rows += [("claim", *r) for r in s.execute(select(
-            Claim.id, Claim.span_start, Claim.span_end, Claim.text)
-            .where(Claim.filing_id == filing.id))]
+        rows = [
+            ("chunk", *r)
+            for r in s.execute(
+                select(Chunk.id, Chunk.char_start, Chunk.char_end, Chunk.text).where(
+                    Chunk.filing_id == filing.id
+                )
+            )
+        ]
+        rows += [
+            ("claim", *r)
+            for r in s.execute(
+                select(Claim.id, Claim.span_start, Claim.span_end, Claim.text).where(
+                    Claim.filing_id == filing.id
+                )
+            )
+        ]
         if rows:
             try:
                 doc = load_text(filing)

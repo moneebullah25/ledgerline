@@ -19,7 +19,9 @@ def period_key(fiscal_year: int, fiscal_period: str) -> tuple[int, int]:
 
 
 def route(
-    claim: Claim, *, event_date: date | None = None,
+    claim: Claim,
+    *,
+    event_date: date | None = None,
     reported_through: tuple[int, str] | None = None,
 ) -> list[AgentName]:
     numeric = claim.value is not None and claim.metric in CONCEPTS
@@ -30,7 +32,8 @@ def route(
         agents.append("forecast")
         target = (claim.target_fiscal_year, claim.target_fiscal_period)
         if (
-            reported_through and None not in target
+            reported_through
+            and None not in target
             and period_key(*target) <= period_key(*reported_through)
         ):
             agents.append("xbrl_table")

@@ -102,7 +102,9 @@ _NUM = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
 _UNIT_BEFORE = re.compile(r"(?:[$€£]|\busd)\s*$", re.IGNORECASE)
 _UNIT_AFTER = re.compile(
     r"(?:\s*|-(?![kmb]\b))(?:%|(?:percent|per cent|percentage|points?|pp|bps|basis|thousand|million|billion"
-    r"|trillion|usd|bn|mn|[kmb])\b)", re.IGNORECASE)
+    r"|trillion|usd|bn|mn|[kmb])\b)",
+    re.IGNORECASE,
+)
 _SMALL = 32
 
 
@@ -147,6 +149,7 @@ def uncited_numbers(text: str, citations: list[Citation], claim_text: str = "") 
     for m in _NUM.finditer(text):
         n = float(m.group().replace(",", ""))
         if not _bare_ordinal_or_year(n, text, m.start(), m.end()) and not any(
-                abs(n - a) <= 1e-9 * max(1.0, abs(a)) for a in allowed):
+            abs(n - a) <= 1e-9 * max(1.0, abs(a)) for a in allowed
+        ):
             out.append(n)
     return out

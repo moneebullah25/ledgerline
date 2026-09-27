@@ -25,12 +25,23 @@ def test_claim_draft_rejects_value_without_unit():
         ClaimDraft(text="rev 5", span_start=0, span_end=5, claim_type="reported_result", value=5)
 
 
-@pytest.mark.parametrize("text", [
-    "Revenue was $25 billion.", "Capex was $2,050 million.", "Sales grew 12%.",
-    "Margin rose 3 points.", "Revenue reached 2050 million USD.", "A $ 7 charge.",
-    "Revenue was €25 billion.", "Revenue was £25 billion.", "Revenue was USD 25 billion.",
-    "A 25-billion buyback.", "Revenue of 25  billion.", "Revenue of 25\nbillion.",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Revenue was $25 billion.",
+        "Capex was $2,050 million.",
+        "Sales grew 12%.",
+        "Margin rose 3 points.",
+        "Revenue reached 2050 million USD.",
+        "A $ 7 charge.",
+        "Revenue was €25 billion.",
+        "Revenue was £25 billion.",
+        "Revenue was USD 25 billion.",
+        "A 25-billion buyback.",
+        "Revenue of 25  billion.",
+        "Revenue of 25\nbillion.",
+    ],
+)
 def test_amounts_are_not_exempt_as_ordinals_or_years(text):
     assert uncited_numbers(text, []) != []
 

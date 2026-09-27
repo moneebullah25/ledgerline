@@ -32,12 +32,14 @@ MAX_RELEASE_LAG_DAYS = 75  # a release comes out within ~2-8 weeks of the quarte
 
 
 def ensure_company(s: Session, ticker: str, name: str, fiscal_year_end: str | None = None) -> int:
-    stmt = insert(Company).values(cik=UNIVERSE[ticker], ticker=ticker, name=name,
-                                  fiscal_year_end=fiscal_year_end)
+    stmt = insert(Company).values(
+        cik=UNIVERSE[ticker], ticker=ticker, name=name, fiscal_year_end=fiscal_year_end
+    )
     stmt = stmt.on_conflict_do_update(
         index_elements=[Company.cik],
         set_={"fiscal_year_end": stmt.excluded.fiscal_year_end}
-        if fiscal_year_end else {"name": Company.name},  # no-op update so RETURNING yields the id
+        if fiscal_year_end
+        else {"name": Company.name},  # no-op update so RETURNING yields the id
     ).returning(Company.id)
     return s.scalar(stmt)
 
@@ -53,7 +55,7 @@ def ingest_filings(s: Session, ticker: str, quarters: int = 6) -> int:
     reports = [r for r in rows if r["form"] in ("10-Q", "10-K")]
     _fill_untagged(reports, periods)
     releases = [r for r in rows if r["form"] == "8-K" and "2.02" in r["items"].split(",")]
-    todo = reports[:quarters] + releases[:quarters + EXTRA_RELEASES]
+    todo = reports[:quarters] + releases[: quarters + EXTRA_RELEASES]
     inserted = 0
     for r in todo:
         if r["accessionNumber"] in known:
@@ -67,8 +69,13 @@ def ingest_filings(s: Session, ticker: str, quarters: int = 6) -> int:
                 fy, fp = periods.get(r["accessionNumber"], (None, None))
             inserted += _store(s, company_id, cik, r, doc, fy, fp)
         # Retries exhausted on one document: record it and move on to the next filing.
-        except (PermanentFetchError, TransientFetchError, httpx.TransportError,
-                LookupError, ValueError) as e:
+        except (
+            PermanentFetchError,
+            TransientFetchError,
+            httpx.TransportError,
+            LookupError,
+            ValueError,
+        ) as e:
             record_failure(s, "ingest_edgar_filings", f"{ticker}:{r['accessionNumber']}", e)
     return inserted
 
@@ -104,24 +111,33 @@ def _fill_untagged(reports: list[dict], periods: dict[str, tuple[int, str]]) -> 
     come one per quarter, in order. Without a tagged predecessor exactly one quarter earlier
     it stays unlabeled rather than guessed."""
     for prev, r in zip(reports[::-1], reports[::-1][1:]):  # oldest first
-        gap = (date.fromisoformat(r["reportDate"] or "1900-01-01")
-               - date.fromisoformat(prev["reportDate"] or "2999-01-01")).days
-        if r["accessionNumber"] not in periods and prev["accessionNumber"] in periods \
-                and 80 <= gap <= 100:
+        gap = (
+            date.fromisoformat(r["reportDate"] or "1900-01-01")
+            - date.fromisoformat(prev["reportDate"] or "2999-01-01")
+        ).days
+        if (
+            r["accessionNumber"] not in periods
+            and prev["accessionNumber"] in periods
+            and 80 <= gap <= 100
+        ):
             fy, fp = periods[prev["accessionNumber"]]
             periods[r["accessionNumber"]] = (fy + 1 if fp == "FY" else fy, NEXT_FP[fp])
 
 
-def _release_period(filed: date, reports: list[dict],
-                    periods: dict[str, tuple[int, str]]) -> tuple[int | None, str | None]:
+def _release_period(
+    filed: date, reports: list[dict], periods: dict[str, tuple[int, str]]
+) -> tuple[int | None, str | None]:
     """The quarter an earnings release reports: the latest 10-Q/10-K period end on or before
     the release date. The release usually precedes that 10-Q by days, but the period end
     always precedes the release. A release more than MAX_RELEASE_LAG_DAYS after the nearest
     known period end (its 10-Q not filed yet, or an off-cycle 2.02) gets NULL, never a guess.
     A release matched to a 10-K is labeled Q4: it reports the fourth quarter and the year.
     """
-    best = max((r for r in reports if r["reportDate"] and date.fromisoformat(r["reportDate"]) <= filed),
-               key=lambda r: r["reportDate"], default=None)
+    best = max(
+        (r for r in reports if r["reportDate"] and date.fromisoformat(r["reportDate"]) <= filed),
+        key=lambda r: r["reportDate"],
+        default=None,
+    )
     if best is None or (filed - date.fromisoformat(best["reportDate"])).days > MAX_RELEASE_LAG_DAYS:
         return None, None
     fy, fp = periods.get(best["accessionNumber"], (None, None))
@@ -146,16 +162,30 @@ def _exhibit_99_1(cik: str, accession: str) -> str:
     raise LookupError(f"no EX-99.1 in {url}")
 
 
-def _store(s: Session, company_id: int, cik: str, r: dict, doc: str,
-           fy: int | None, fp: str | None) -> int:
+def _store(
+    s: Session, company_id: int, cik: str, r: dict, doc: str, fy: int | None, fp: str | None
+) -> int:
     url = f"{ARCHIVES}/{int(cik)}/{r['accessionNumber'].replace('-', '')}/{doc}"
     data = sec_get(url)
     sha, path = put_object(data, PurePosixPath(doc).suffix.lower())
-    stmt = insert(Filing).values(
-        company_id=company_id, accession_no=r["accessionNumber"], form_type=r["form"],
-        filed_at=date.fromisoformat(r["filingDate"]),
-        period_of_report=date.fromisoformat(r["reportDate"]) if r["reportDate"] else None,
-        fiscal_year=fy, fiscal_period=fp, doc_url=url, storage_path=path,
-        source_url=url, fetched_at=datetime.now(UTC), sha256=sha, license_note=LICENSE,
-    ).on_conflict_do_nothing(index_elements=[Filing.accession_no]).returning(Filing.id)
+    stmt = (
+        insert(Filing)
+        .values(
+            company_id=company_id,
+            accession_no=r["accessionNumber"],
+            form_type=r["form"],
+            filed_at=date.fromisoformat(r["filingDate"]),
+            period_of_report=date.fromisoformat(r["reportDate"]) if r["reportDate"] else None,
+            fiscal_year=fy,
+            fiscal_period=fp,
+            doc_url=url,
+            storage_path=path,
+            source_url=url,
+            fetched_at=datetime.now(UTC),
+            sha256=sha,
+            license_note=LICENSE,
+        )
+        .on_conflict_do_nothing(index_elements=[Filing.accession_no])
+        .returning(Filing.id)
+    )
     return 1 if s.scalar(stmt) is not None else 0

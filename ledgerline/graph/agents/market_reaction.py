@@ -39,20 +39,30 @@ def assess(ticker: str, event: date, prices: list[tuple[int, str, date, float]])
     days = sorted(by[ticker].keys() & by[BENCH].keys())
     i0 = next((i for i, d in enumerate(days) if d >= event), None)
     if i0 is None or i0 < 2 or i0 + 1 >= len(days):
-        return EvidenceItem(agent="market_reaction", stance="insufficient",
-                            summary="not enough trading days around the event for a [-1, +1] window")
+        return EvidenceItem(
+            agent="market_reaction",
+            stance="insufficient",
+            summary="not enough trading days around the event for a [-1, +1] window",
+        )
     start, end = days[i0 - 2], days[i0 + 1]
     rets, cites = {}, []
     for t in (ticker, BENCH):
         (a_id, a), (b_id, b) = by[t][start], by[t][end]
         rets[t] = b / a - 1
-        cites += [Citation(kind="price", ref_id=a_id, value=a, unit="USD"),
-                  Citation(kind="price", ref_id=b_id, value=b, unit="USD")]
+        cites += [
+            Citation(kind="price", ref_id=a_id, value=a, unit="USD"),
+            Citation(kind="price", ref_id=b_id, value=b, unit="USD"),
+        ]
     ar = rets[ticker] - rets[BENCH]
     return EvidenceItem(
-        agent="market_reaction", stance="insufficient",
+        agent="market_reaction",
+        stance="insufficient",
         summary=f"{ticker} abnormal return vs {BENCH} over the [-1, +1] window around {event}.",
         citations=cites,
-        payload={"abnormal_return": ar, "stock_return": rets[ticker], "bench_return": rets[BENCH],
-                 "window": [start.isoformat(), end.isoformat()]},
+        payload={
+            "abnormal_return": ar,
+            "stock_return": rets[ticker],
+            "bench_return": rets[BENCH],
+            "window": [start.isoformat(), end.isoformat()],
+        },
     )

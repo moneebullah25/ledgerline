@@ -23,9 +23,17 @@ def _duration(path: Path) -> float | None:
         return c.duration / av.time_base if c.duration else None
 
 
-def ingest_call_audio(s: Session, path_or_url: str, *, kind: str, company_id: int | None,
-                      event_date: date | None, license_note: str,
-                      fiscal_year: int | None = None, fiscal_period: str | None = None) -> int:
+def ingest_call_audio(
+    s: Session,
+    path_or_url: str,
+    *,
+    kind: str,
+    company_id: int | None,
+    event_date: date | None,
+    license_note: str,
+    fiscal_year: int | None = None,
+    fiscal_period: str | None = None,
+) -> int:
     """Returns call_audio.id; the same bytes ingested twice return the existing row.
 
     Remote audio: https only, from a host in settings().audio_hosts. Local audio: only files
@@ -36,7 +44,9 @@ def ingest_call_audio(s: Session, path_or_url: str, *, kind: str, company_id: in
         raise ValueError(f"not an audio file type ({suffix or 'no suffix'}): {path_or_url}")
     if url.scheme:
         if url.scheme != "https" or url.hostname not in {h.lower() for h in settings().audio_hosts}:
-            raise ValueError(f"audio URL not allowed (https + LEDGERLINE_AUDIO_HOSTS): {path_or_url}")
+            raise ValueError(
+                f"audio URL not allowed (https + LEDGERLINE_AUDIO_HOSTS): {path_or_url}"
+            )
         data, source_url = get(path_or_url, {}, max_bytes=MAX_AUDIO_BYTES), path_or_url
     else:
         p = Path(path_or_url).resolve()
@@ -50,10 +60,18 @@ def ingest_call_audio(s: Session, path_or_url: str, *, kind: str, company_id: in
         return existing
     _, rel = put_object(data, suffix)
     row = CallAudio(
-        company_id=company_id, kind=kind, event_date=event_date, fiscal_year=fiscal_year,
-        fiscal_period=fiscal_period, storage_path=rel,
-        duration_s=_duration(settings().data_dir / rel), source_url=source_url,
-        fetched_at=datetime.now(UTC), sha256=sha, license_note=license_note)
+        company_id=company_id,
+        kind=kind,
+        event_date=event_date,
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_period,
+        storage_path=rel,
+        duration_s=_duration(settings().data_dir / rel),
+        source_url=source_url,
+        fetched_at=datetime.now(UTC),
+        sha256=sha,
+        license_note=license_note,
+    )
     s.add(row)
     s.flush()
     return row.id

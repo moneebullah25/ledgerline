@@ -52,19 +52,28 @@ def summarize(rows: list[dict]) -> dict:
         "backtest_precision": _rate(sum(r["missed"] for r in flagged), len(flagged)),
         "miss_rate_unflagged": _rate(sum(r["missed"] for r in unflagged), len(unflagged)),
         "miss_rate_all": _rate(sum(r["missed"] for r in known), len(known)),
-        "flag_recall": _rate(sum(r["flagged"] for r in known if r["missed"]),
-                             sum(r["missed"] for r in known)),
-        "n_guidance": len(rows), "n_outcome_known": len(known), "n_flagged": len(flagged),
+        "flag_recall": _rate(
+            sum(r["flagged"] for r in known if r["missed"]), sum(r["missed"] for r in known)
+        ),
+        "n_guidance": len(rows),
+        "n_outcome_known": len(known),
+        "n_flagged": len(flagged),
         "n_forecast_decided": sum(r["forecast_stance"] != "insufficient" for r in known),
-        "pairs": len(pairs), "pairs_target_met": len(pairs) >= TARGET_PAIRS,
+        "pairs": len(pairs),
+        "pairs_target_met": len(pairs) >= TARGET_PAIRS,
     }
 
 
 def backtest(s: Session) -> list[dict]:
     claims = s.execute(
-        select(Claim, Company.ticker).join(Company, Company.id == Claim.company_id)
-        .where(Claim.claim_type == "guidance", Claim.value.is_not(None),
-               Claim.metric.in_(list(CONCEPTS)), Claim.extractor_version == extractor_version())
+        select(Claim, Company.ticker)
+        .join(Company, Company.id == Claim.company_id)
+        .where(
+            Claim.claim_type == "guidance",
+            Claim.value.is_not(None),
+            Claim.metric.in_(list(CONCEPTS)),
+            Claim.extractor_version == extractor_version(),
+        )
         .order_by(Claim.id)
     ).all()
     rows = []
@@ -72,16 +81,31 @@ def backtest(s: Session) -> list[dict]:
         ctx, lock = context(s, c), Lock()
         fc, _ = forecast.run(s, c, ctx, lock)
         out, _ = xbrl_table.run(s, c, ctx, lock)
-        rows.append({
-            "claim_id": c.id, "ticker": ticker, "release": f"{c.fiscal_year}{c.fiscal_period}",
-            "target": f"{c.target_fiscal_year}{c.target_fiscal_period}", "metric": c.metric,
-            "text": c.text, "forecast_stance": fc.stance, "forecast_why": fc.summary,
-            "flagged": fc.stance == "contradicts",
-            "missed": None if out.stance == "insufficient" else out.stance == "contradicts",
-            "actual": out.payload.get("actual"), "extractor_version": c.extractor_version,
-        })
-        print(json.dumps({k: rows[-1][k] for k in ("claim_id", "ticker", "target", "metric",
-                                                   "forecast_stance", "missed")}), flush=True)
+        rows.append(
+            {
+                "claim_id": c.id,
+                "ticker": ticker,
+                "release": f"{c.fiscal_year}{c.fiscal_period}",
+                "target": f"{c.target_fiscal_year}{c.target_fiscal_period}",
+                "metric": c.metric,
+                "text": c.text,
+                "forecast_stance": fc.stance,
+                "forecast_why": fc.summary,
+                "flagged": fc.stance == "contradicts",
+                "missed": None if out.stance == "insufficient" else out.stance == "contradicts",
+                "actual": out.payload.get("actual"),
+                "extractor_version": c.extractor_version,
+            }
+        )
+        print(
+            json.dumps(
+                {
+                    k: rows[-1][k]
+                    for k in ("claim_id", "ticker", "target", "metric", "forecast_stance", "missed")
+                }
+            ),
+            flush=True,
+        )
     return rows
 
 
@@ -95,11 +119,23 @@ def main(argv: list[str] | None = None) -> None:
         rows = backtest(s)
         metrics = summarize(rows)
         if not a.no_write:
-            sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                                 check=False).stdout.strip() or None
-            s.add(EvalRun(git_sha=sha, layer="L4", metrics=metrics, details={
-                "targets": {"pairs": TARGET_PAIRS, "precision": TARGET_PRECISION},
-                "rows": rows}))
+            sha = (
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+                ).stdout.strip()
+                or None
+            )
+            s.add(
+                EvalRun(
+                    git_sha=sha,
+                    layer="L4",
+                    metrics=metrics,
+                    details={
+                        "targets": {"pairs": TARGET_PAIRS, "precision": TARGET_PRECISION},
+                        "rows": rows,
+                    },
+                )
+            )
     print(json.dumps(metrics, indent=2))
 
 

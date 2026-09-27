@@ -198,8 +198,7 @@ def _encode(created_at: datetime, id_: object) -> str:
 
 
 def _invalid(loc: tuple, msg: str, value: object) -> RequestValidationError:
-    return RequestValidationError([{"type": "value_error", "loc": loc, "msg": msg,
-                                    "input": value}])
+    return RequestValidationError([{"type": "value_error", "loc": loc, "msg": msg, "input": value}])
 
 
 def _decode(cursor: str) -> tuple[datetime, str]:
@@ -219,8 +218,7 @@ def _company(s: Session, ticker: str) -> Company:
     return company
 
 
-@app.get("/healthz", response_model=None,
-         responses={503: {"description": "database unreachable"}})
+@app.get("/healthz", response_model=None, responses={503: {"description": "database unreachable"}})
 def healthz(s: DB) -> dict | JSONResponse:
     try:
         s.execute(text("SELECT 1"))
@@ -236,8 +234,9 @@ def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
     if not expected:
         raise HTTPException(503, "report creation is disabled: LEDGERLINE_API_KEY is not set")
     if x_api_key is None or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
-        raise HTTPException(401, "missing or invalid X-API-Key",
-                            headers={"WWW-Authenticate": "X-API-Key"})
+        raise HTTPException(
+            401, "missing or invalid X-API-Key", headers={"WWW-Authenticate": "X-API-Key"}
+        )
 
 
 @app.post("/v1/reports", status_code=202, dependencies=[Depends(require_api_key)])
@@ -249,23 +248,34 @@ def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
     key = (company.id, body.fiscal_year, body.fiscal_period)
     # Serialise POSTs for the same quarter so two concurrent requests cannot both insert.
     s.execute(select(func.pg_advisory_xact_lock(func.hashtext(f"report:{key}"))))
-    report = s.scalar(select(Report).where(
-        Report.company_id == company.id, Report.fiscal_year == body.fiscal_year,
-        Report.fiscal_period == body.fiscal_period,
-        Report.status.in_(("queued", "running") if body.rerun else ("queued", "running", "done")),
-    ).order_by(Report.created_at.desc()).limit(1))
+    report = s.scalar(
+        select(Report)
+        .where(
+            Report.company_id == company.id,
+            Report.fiscal_year == body.fiscal_year,
+            Report.fiscal_period == body.fiscal_period,
+            Report.status.in_(
+                ("queued", "running") if body.rerun else ("queued", "running", "done")
+            ),
+        )
+        .order_by(Report.created_at.desc())
+        .limit(1)
+    )
     if report is None:
         queued = s.scalar(select(func.count()).where(Report.status == "queued"))
         if queued >= MAX_QUEUED:
-            raise HTTPException(429, f"{queued} reports already queued; retry later",
-                                headers={"Retry-After": "60"})
-        pending = s.scalar(select(func.count()).where(
-            Report.status.in_(("queued", "running"))))
+            raise HTTPException(
+                429, f"{queued} reports already queued; retry later", headers={"Retry-After": "60"}
+            )
+        pending = s.scalar(select(func.count()).where(Report.status.in_(("queued", "running"))))
         if pending >= settings().max_pending_reports:
-            raise HTTPException(429, "too many pending reports",
-                                headers={"Retry-After": "60"})
-        report = Report(company_id=company.id, fiscal_year=body.fiscal_year,
-                        fiscal_period=body.fiscal_period, status="queued")
+            raise HTTPException(429, "too many pending reports", headers={"Retry-After": "60"})
+        report = Report(
+            company_id=company.id,
+            fiscal_year=body.fiscal_year,
+            fiscal_period=body.fiscal_period,
+            status="queued",
+        )
         s.add(report)
     s.commit()
     response.headers["Location"] = f"/v1/reports/{report.id}"
@@ -304,16 +314,29 @@ def get_claim(claim_id: ClaimId, s: DB) -> ClaimDetail:
     claim = s.get(Claim, claim_id)
     if claim is None:
         raise HTTPException(404, "claim not found")
-    verdict = s.scalar(select(Verdict).join(Report).where(
-        Verdict.claim_id == claim_id, Report.status == "done",
-    ).order_by(Verdict.id.desc()).limit(1))
+    verdict = s.scalar(
+        select(Verdict)
+        .join(Report)
+        .where(
+            Verdict.claim_id == claim_id,
+            Report.status == "done",
+        )
+        .order_by(Verdict.id.desc())
+        .limit(1)
+    )
     evidence, spans = [], []
     if verdict is not None:
-        evidence = s.scalars(select(Evidence).where(
-            Evidence.claim_id == claim_id, Evidence.report_id == verdict.report_id,
-        ).order_by(Evidence.id)).all()
-        spans = s.scalars(select(Span).where(Span.trace_id == verdict.trace_id)
-                          .order_by(Span.started_at)).all()
+        evidence = s.scalars(
+            select(Evidence)
+            .where(
+                Evidence.claim_id == claim_id,
+                Evidence.report_id == verdict.report_id,
+            )
+            .order_by(Evidence.id)
+        ).all()
+        spans = s.scalars(
+            select(Span).where(Span.trace_id == verdict.trace_id).order_by(Span.started_at)
+        ).all()
     return ClaimDetail(
         claim=ClaimOut.model_validate(claim),
         verdict=VerdictOut.model_validate(verdict) if verdict else None,
@@ -323,8 +346,9 @@ def get_claim(claim_id: ClaimId, s: DB) -> ClaimDetail:
 
 
 @app.get("/v1/companies/{ticker}/claims")
-def company_claims(ticker: str, s: DB, limit: Limit = 50,
-                   cursor: str | None = None) -> Page[ClaimOut]:
+def company_claims(
+    ticker: str, s: DB, limit: Limit = 50, cursor: str | None = None
+) -> Page[ClaimOut]:
     company = _company(s, ticker)
     q = select(Claim).where(Claim.company_id == company.id)
     if cursor is not None:
@@ -336,8 +360,10 @@ def company_claims(ticker: str, s: DB, limit: Limit = 50,
         q = q.where(tuple_(Claim.created_at, Claim.id) < tuple_(ts, int(id_)))
     rows = s.scalars(q.order_by(Claim.created_at.desc(), Claim.id.desc()).limit(limit + 1)).all()
     last = rows[limit - 1] if len(rows) > limit else None
-    return Page(items=[ClaimOut.model_validate(c) for c in rows[:limit]],
-                next_cursor=_encode(last.created_at, last.id) if last else None)
+    return Page(
+        items=[ClaimOut.model_validate(c) for c in rows[:limit]],
+        next_cursor=_encode(last.created_at, last.id) if last else None,
+    )
 
 
 @app.get("/v1/evals/latest")
@@ -345,7 +371,8 @@ def evals_latest(s: DB) -> list[EvalRunOut]:
     """Public on purpose: the eval numbers are the product's credibility (§11, §20).
     The latest run of each eval: L1 alone has four (retrieval, ner, wer, forecast)."""
     runs = s.scalars(
-        select(EvalRun).distinct(EvalRun.layer, EvalRun.name)
+        select(EvalRun)
+        .distinct(EvalRun.layer, EvalRun.name)
         .order_by(EvalRun.layer, EvalRun.name, EvalRun.created_at.desc(), EvalRun.id.desc())
     ).all()
     return [EvalRunOut.model_validate(r) for r in runs]

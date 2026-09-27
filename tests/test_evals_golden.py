@@ -9,17 +9,36 @@ from ledgerline.models import Company, Filing
 
 
 def _claim(**kw) -> dict:
-    base = {"text": "Revenue was $94.9 billion", "claim_type": "reported_result", "metric": "revenue",
-            "value": 94.9e9, "value_high": None, "unit": "USD", "fiscal_year": 2025,
-            "fiscal_period": "Q3", "target_fiscal_year": 2025, "target_fiscal_period": "Q3",
-            "comparison": None, "hedging_score": 0.0, "speaker_role": None}
+    base = {
+        "text": "Revenue was $94.9 billion",
+        "claim_type": "reported_result",
+        "metric": "revenue",
+        "value": 94.9e9,
+        "value_high": None,
+        "unit": "USD",
+        "fiscal_year": 2025,
+        "fiscal_period": "Q3",
+        "target_fiscal_year": 2025,
+        "target_fiscal_period": "Q3",
+        "comparison": None,
+        "hedging_score": 0.0,
+        "speaker_role": None,
+    }
     return base | kw
 
 
 def _rec(i: str, gold: str = "supported", **claim) -> dict:
-    return {"id": i, "gold": gold, "evidence": "x", "pass1": gold, "pass2": None,
-            "claim": _claim(**claim), "accession_no": "a", "span": [0, 1],
-            "extractor_version": "v"}
+    return {
+        "id": i,
+        "gold": gold,
+        "evidence": "x",
+        "pass1": gold,
+        "pass2": None,
+        "claim": _claim(**claim),
+        "accession_no": "a",
+        "span": [0, 1],
+        "extractor_version": "v",
+    }
 
 
 # ------------------------------------------------------------------ frozen data files
@@ -43,22 +62,24 @@ def test_frozen_heldout_set_is_blind_new_and_stratified():
     assert {r["extractor_version"] for r in held} == {golden.HELDOUT_EXTRACTOR}
     spans = {(g["accession_no"], tuple(g["span"])) for g in gold}
     for r in held:  # no filing span shared with (or overlapping) a golden record
-        assert not any(acc == r["accession_no"] and golden._overlaps(tuple(r["span"]), sp)
-                       for acc, sp in spans)
+        assert not any(
+            acc == r["accession_no"] and golden._overlaps(tuple(r["span"]), sp) for acc, sp in spans
+        )
     types = Counter(r["claim"]["claim_type"] for r in held)
     assert set(types) == {"reported_result", "comparison", "guidance", "qualitative"}
     assert len({r["ticker"] for r in held}) == 15
     # Guidance with a known outcome is labelled against it (not left unverifiable).
-    assert any(r["claim"]["claim_type"] == "guidance" and r["gold"] != "unverifiable"
-               for r in held)
+    assert any(r["claim"]["claim_type"] == "guidance" and r["gold"] != "unverifiable" for r in held)
 
 
 def test_heldout_candidates_drop_golden_spans_and_judged_claims():
     g = [{"accession_no": "a", "span": [10, 20]}]
-    claims = [{"source_claim_id": 1, "accession_no": "a", "span": [15, 30]},   # overlaps
-              {"source_claim_id": 2, "accession_no": "a", "span": [20, 30]},   # adjacent: kept
-              {"source_claim_id": 3, "accession_no": "b", "span": [10, 20]},   # other filing
-              {"source_claim_id": 4, "accession_no": "b", "span": [40, 50]}]   # has a verdict
+    claims = [
+        {"source_claim_id": 1, "accession_no": "a", "span": [15, 30]},  # overlaps
+        {"source_claim_id": 2, "accession_no": "a", "span": [20, 30]},  # adjacent: kept
+        {"source_claim_id": 3, "accession_no": "b", "span": [10, 20]},  # other filing
+        {"source_claim_id": 4, "accession_no": "b", "span": [40, 50]},
+    ]  # has a verdict
     kept = golden.heldout_candidates(claims, g, judged={4})
     assert [c["source_claim_id"] for c in kept] == [2, 3]
 
@@ -74,8 +95,12 @@ def test_perturbations_come_from_supported_golden_claims():
 
 def test_load_rejects_bad_records(tmp_path):
     f = tmp_path / "g.jsonl"
-    for bad in ([_rec("g1"), _rec("g1")], [_rec("g1", gold="false")], [_rec("g1") | {"evidence": ""}],
-                [_rec("g1") | {"pass2": "maybe"}]):
+    for bad in (
+        [_rec("g1"), _rec("g1")],
+        [_rec("g1", gold="false")],
+        [_rec("g1") | {"evidence": ""}],
+        [_rec("g1") | {"pass2": "maybe"}],
+    ):
         f.write_text("".join(json.dumps(r) + "\n" for r in bad))
         with pytest.raises(ValueError):
             golden.load(f)
@@ -85,10 +110,18 @@ def test_load_rejects_bad_records(tmp_path):
 
 
 def test_stratified_quota_round_robin_and_determinism():
-    claims = [{"source_claim_id": i, "ticker": t, "claim_type": ct, "metric": m}
-              for i, (t, ct, m) in enumerate(
-                  [(t, ct, m) for t in "ABC" for ct in ("reported_result", "guidance")
-                   for m in ("revenue", "eps_diluted") for _ in range(3)])]
+    claims = [
+        {"source_claim_id": i, "ticker": t, "claim_type": ct, "metric": m}
+        for i, (t, ct, m) in enumerate(
+            [
+                (t, ct, m)
+                for t in "ABC"
+                for ct in ("reported_result", "guidance")
+                for m in ("revenue", "eps_diluted")
+                for _ in range(3)
+            ]
+        )
+    ]
     quota = {"reported_result": 6, "guidance": 2}
     a = golden.stratified(claims, quota, seed=1)
     assert a == golden.stratified(claims, quota, seed=1)
@@ -124,8 +157,13 @@ def test_rewrite_number_keeps_format_sign_and_skips_tiny_moves():
 
 
 def test_perturb_only_supported_single_value_results():
-    recs = [_rec("g001"), _rec("g002", gold="unverifiable"), _rec("g003", claim_type="guidance"),
-            _rec("g004", value_high=99e9), _rec("g005", value=0.0, text="flat")]
+    recs = [
+        _rec("g001"),
+        _rec("g002", gold="unverifiable"),
+        _rec("g003", claim_type="guidance"),
+        _rec("g004", value_high=99e9),
+        _rec("g005", value=0.0, text="flat"),
+    ]
     out = golden.perturb(recs, seed=3)
     assert [p["id"] for p in out] == ["p001"]
     assert out[0]["gold"] == "contradicted" and out[0]["perturbed_from"] == "g001"
@@ -139,9 +177,18 @@ def test_to_claim_is_transient_and_resolves_filing(db):
     co = Company(cik="0000320193", ticker="AAPL", name="Apple")
     db.add(co)
     db.flush()
-    f = Filing(company_id=co.id, accession_no="0000320193-25-000071", form_type="8-K",
-               filed_at=date(2025, 7, 31), doc_url="u", storage_path="objects/x.htm", source_url="u",
-               fetched_at=datetime.now(UTC), sha256="0" * 64, license_note="t")
+    f = Filing(
+        company_id=co.id,
+        accession_no="0000320193-25-000071",
+        form_type="8-K",
+        filed_at=date(2025, 7, 31),
+        doc_url="u",
+        storage_path="objects/x.htm",
+        source_url="u",
+        fetched_at=datetime.now(UTC),
+        sha256="0" * 64,
+        license_note="t",
+    )
     db.add(f)
     db.flush()
     rec = _rec("g001") | {"accession_no": f.accession_no, "span": [10, 20]}
@@ -161,14 +208,33 @@ def test_fixture_round_trip_keeps_ids_and_reembeds(db, tmp_path, monkeypatch):
     co = Company(cik="0000320193", ticker="AAPL", name="Apple")
     db.add(co)
     db.flush()
-    f = Filing(company_id=co.id, accession_no="0000320193-25-000073", form_type="10-Q",
-               filed_at=date(2025, 8, 1), fiscal_year=2025, fiscal_period="Q3", doc_url="u",
-               storage_path="objects/x.htm", source_url="u", fetched_at=datetime.now(UTC),
-               sha256="0" * 64, license_note="t")
+    f = Filing(
+        company_id=co.id,
+        accession_no="0000320193-25-000073",
+        form_type="10-Q",
+        filed_at=date(2025, 8, 1),
+        fiscal_year=2025,
+        fiscal_period="Q3",
+        doc_url="u",
+        storage_path="objects/x.htm",
+        source_url="u",
+        fetched_at=datetime.now(UTC),
+        sha256="0" * 64,
+        license_note="t",
+    )
     db.add(f)
     db.flush()
-    db.add(Chunk(filing_id=f.id, chunk_index=0, section_path="Item 2", char_start=0, char_end=5,
-                 text="Total net sales | 94,036", token_count=5))
+    db.add(
+        Chunk(
+            filing_id=f.id,
+            chunk_index=0,
+            section_path="Item 2",
+            char_start=0,
+            char_end=5,
+            text="Total net sales | 94,036",
+            token_count=5,
+        )
+    )
     db.flush()
     chunk_id = db.scalar(select(Chunk.id))
 
@@ -177,7 +243,9 @@ def test_fixture_round_trip_keeps_ids_and_reembeds(db, tmp_path, monkeypatch):
     db.execute(delete(Chunk))
     db.execute(delete(Filing))
     db.execute(delete(Company))
-    monkeypatch.setattr(embed, "embed_passages", lambda texts: np.ones((len(texts), 384)) / 384**0.5)
+    monkeypatch.setattr(
+        embed, "embed_passages", lambda texts: np.ones((len(texts), 384)) / 384**0.5
+    )
     assert golden.load_fixture(db, tmp_path) == 1
     row = db.execute(text("SELECT id, embedding IS NOT NULL FROM chunk")).one()
     assert tuple(row) == (chunk_id, True)

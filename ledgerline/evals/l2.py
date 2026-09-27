@@ -92,7 +92,10 @@ def clopper_pearson(k: int, n: int, alpha: float = 0.05) -> list[float] | None:
 
 def prf(pairs: list[tuple[str, str]]) -> dict:
     """pairs: (gold, predicted). Per-label precision/recall/F1 (None when undefined)."""
-    out = {"n": len(pairs), "accuracy": sum(g == p for g, p in pairs) / len(pairs) if pairs else None}
+    out = {
+        "n": len(pairs),
+        "accuracy": sum(g == p for g, p in pairs) / len(pairs) if pairs else None,
+    }
     f1s = []
     for lab in LABELS:
         tp = sum(g == p == lab for g, p in pairs)
@@ -101,8 +104,14 @@ def prf(pairs: list[tuple[str, str]]) -> dict:
         prec = tp / pred if pred else None
         rec = tp / gold if gold else None
         f1 = 2 * prec * rec / (prec + rec) if prec and rec else (0.0 if pred and gold else None)
-        out[lab] = {"precision": prec, "recall": rec, "f1": f1, "tp": tp, "predicted": pred,
-                    "gold": gold}
+        out[lab] = {
+            "precision": prec,
+            "recall": rec,
+            "f1": f1,
+            "tp": tp,
+            "predicted": pred,
+            "gold": gold,
+        }
         if f1 is not None:
             f1s.append(f1)
     out["macro_f1"] = sum(f1s) / len(f1s) if f1s else None
@@ -121,18 +130,27 @@ def _insufficient(agent: str) -> EvidenceItem:
 def _neutral_critic(claim, evidence):
     stance, _ = decide(claim, evidence)
     counter = {"supports": "contradicts", "contradicts": "supports"}.get(stance, "insufficient")
-    return CriticOutput(counter_stance=counter, argument="Critic disabled for ablation.",
-                        weakest_evidence=None), llm.OFFLINE
+    return CriticOutput(
+        counter_stance=counter, argument="Critic disabled for ablation.", weakest_evidence=None
+    ), llm.OFFLINE
 
 
 def _search_no_rerank(s: Session, query: str, company_id: int, lock):
     """Stand-in for filing_rag._search: same filings, RRF order, no cross-encoder. Holds the
     lock through the query embedding too (serialises agents; fine for an ablation)."""
     with lock:
-        fids = list(s.scalars(select(Filing.id).where(
-            Filing.company_id == company_id, Filing.form_type.in_(filing_rag.PERIODIC))))
-        return search(s, query, company_id=company_id, k=filing_rag.K, filing_ids=fids,
-                      rerank=False) if fids else []
+        fids = list(
+            s.scalars(
+                select(Filing.id).where(
+                    Filing.company_id == company_id, Filing.form_type.in_(filing_rag.PERIODIC)
+                )
+            )
+        )
+        return (
+            search(s, query, company_id=company_id, k=filing_rag.K, filing_ids=fids, rerank=False)
+            if fids
+            else []
+        )
 
 
 def _match_key(old: dict, a: int, b: int, c: Claim) -> tuple:
@@ -146,29 +164,49 @@ def remap_current(s: Session, recs: list[dict]) -> tuple[list[dict], list[str]]:
     out, unmatched = [], []
     for r in recs:
         (a, b), old = r["span"], r["claim"]
-        cands = s.scalars(select(Claim).join(Filing, Filing.id == Claim.filing_id).where(
-            Filing.accession_no == r["accession_no"], Claim.extractor_version == extractor_version(),
-            Claim.span_start < b, Claim.span_end > a)).all()
+        cands = s.scalars(
+            select(Claim)
+            .join(Filing, Filing.id == Claim.filing_id)
+            .where(
+                Filing.accession_no == r["accession_no"],
+                Claim.extractor_version == extractor_version(),
+                Claim.span_start < b,
+                Claim.span_end > a,
+            )
+        ).all()
         if not cands:
             unmatched.append(r["id"])
             continue
         c = max((_match_key(old, a, b, c), c) for c in cands)[1]  # key ends in the unique id
-        out.append(r | {"source_claim_id": c.id, "extractor_version": c.extractor_version,
-                        "span": [c.span_start, c.span_end],
-                        "claim": {k: jsonable(getattr(c, k)) for k in FIELDS}})
+        out.append(
+            r
+            | {
+                "source_claim_id": c.id,
+                "extractor_version": c.extractor_version,
+                "span": [c.span_start, c.span_end],
+                "claim": {k: jsonable(getattr(c, k)) for k in FIELDS},
+            }
+        )
     return out, unmatched
 
 
 def _predict_one(s: Session, r: dict, agents: dict | None = None) -> dict:
     try:
         res = build.verify_claim(s, to_claim(s, r), Tracer(), agents)
-        return {"label": res.verdict.label, "refused": res.refused,
-                "evidence": {e.agent: e for e in res.evidence}}
+        return {
+            "label": res.verdict.label,
+            "refused": res.refused,
+            "evidence": {e.agent: e for e in res.evidence},
+        }
     except (SQLAlchemyError, ImportError, llm.RateLimited):
         raise
     except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
-        return {"label": "unverifiable", "refused": True, "evidence": {},
-                "error": f"{type(e).__name__}: {e}"}
+        return {
+            "label": "unverifiable",
+            "refused": True,
+            "evidence": {},
+            "error": f"{type(e).__name__}: {e}",
+        }
 
 
 def predict(s: Session, recs: list[dict], override=None, workers: int = 1) -> dict[str, dict]:
@@ -177,8 +215,10 @@ def predict(s: Session, recs: list[dict], override=None, workers: int = 1) -> di
     (F5). Database errors and ImportError propagate: they would fail every claim alike.
     override(rid) -> {agent: fn} replaces agents for that claim only (ablations). workers > 1
     verifies claims in parallel, one Session per claim, for the slow online path."""
+
     def agents(r):
         return override(r["id"]) if override else None
+
     if workers <= 1:
         return {r["id"]: _predict_one(s, r, agents(r)) for r in recs}
     from ledgerline.db import engine
@@ -189,6 +229,7 @@ def predict(s: Session, recs: list[dict], override=None, workers: int = 1) -> di
                 return r["id"], _predict_one(ws, r, agents(r))
             finally:
                 ws.rollback()
+
     with ThreadPoolExecutor(workers) as pool:
         return dict(pool.map(one, recs))
 
@@ -196,23 +237,32 @@ def predict(s: Session, recs: list[dict], override=None, workers: int = 1) -> di
 def save_evidence(pred: dict[str, dict], path: str) -> None:
     """The per-claim evidence L3's judge reads, so it does not re-run the graph."""
     with open(path, "w") as f:
-        json.dump({rid: {a: e.model_dump() for a, e in p["evidence"].items()}
-                   for rid, p in pred.items()}, f)
+        json.dump(
+            {rid: {a: e.model_dump() for a, e in p["evidence"].items()} for rid, p in pred.items()},
+            f,
+        )
 
 
 def ablations(full: dict[str, dict]) -> dict:
     """name -> (agent override per golden id, extra patch context)."""
+
     def keep(rid, names):
         return {n: _fixed(e) for n, e in full[rid]["evidence"].items() if n in names}
 
     others = [a for a in build.AGENTS if a != "xbrl_table"]
     return {
-        "no_reranker": (lambda rid: keep(rid, set(build.AGENTS) - {"filing_rag"}),
-                        patch.object(filing_rag, "_search", _search_no_rerank)),
-        "no_critic": (lambda rid: keep(rid, set(build.AGENTS)),
-                      patch.object(critic, "critique", _neutral_critic)),
-        "xbrl_only": (lambda rid: keep(rid, {"xbrl_table"})
-                      | {a: _fixed(_insufficient(a)) for a in others}, nullcontext()),
+        "no_reranker": (
+            lambda rid: keep(rid, set(build.AGENTS) - {"filing_rag"}),
+            patch.object(filing_rag, "_search", _search_no_rerank),
+        ),
+        "no_critic": (
+            lambda rid: keep(rid, set(build.AGENTS)),
+            patch.object(critic, "critique", _neutral_critic),
+        ),
+        "xbrl_only": (
+            lambda rid: keep(rid, {"xbrl_table"}) | {a: _fixed(_insufficient(a)) for a in others},
+            nullcontext(),
+        ),
     }
 
 
@@ -230,11 +280,15 @@ def summarize(recs: list[dict], pert: list[dict], pred: dict[str, dict]) -> tupl
         "accuracy": m["accuracy"],
         "accuracy_ci": clopper_pearson(sum(g == p for g, p in real), len(real)),
         "macro_f1": m["macro_f1"],
-        **{f"{lab}_{k}": m[lab][k] for lab in ("supported", "unverifiable")
-           for k in ("precision", "recall", "f1")},
+        **{
+            f"{lab}_{k}": m[lab][k]
+            for lab in ("supported", "unverifiable")
+            for k in ("precision", "recall", "f1")
+        },
         "perturbed_contradiction_recall": mp["contradicted"]["recall"],
         "combined_contradiction_precision": mc["contradicted"]["precision"],
-        "n_real": len(recs), "n_perturbed": len(pert),
+        "n_real": len(recs),
+        "n_perturbed": len(pert),
         "errors": sum("error" in p for p in pred.values()),
     }, {"real": m, "perturbed": mp, "combined": mc}
 
@@ -250,8 +304,14 @@ def cap_workers(workers: int, pool_size: int) -> int:
     return capped
 
 
-def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bool = True,
-        evidence_out: str | None = None, set_name: str = "golden") -> dict:
+def run(
+    write: bool = False,
+    current: bool = False,
+    workers: int = 1,
+    ablate: bool = True,
+    evidence_out: str | None = None,
+    set_name: str = "golden",
+) -> dict:
     """The §12 gate contract: {"metrics": {...}, "per_claim": {id: {"gold", "predicted"}}}.
     current=True scores the gold labels against today's claims (see module docstring);
     set_name picks the labelled set (SETS). Perturbations exist for the golden set only."""
@@ -259,8 +319,7 @@ def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bo
 
     workers = cap_workers(workers, engine().pool.size())
     recs = load(SETS[set_name])
-    pert = (load(PERTURBED) if set_name == "golden" and PERTURBED.exists() and not current
-            else [])
+    pert = load(PERTURBED) if set_name == "golden" and PERTURBED.exists() and not current else []
     unmatched: list[str] = []
     # A plain Session that is never committed: the eval must not write claim/verdict rows.
     with Session(engine()) as s:
@@ -271,7 +330,7 @@ def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bo
         if evidence_out:
             save_evidence(full, evidence_out)
         abl = {}
-        for name, (override, ctx) in (ablations(full).items() if ablate else ()):
+        for name, (override, ctx) in ablations(full).items() if ablate else ():
             with ctx:
                 abl[name] = predict(s, allr, override, workers)
         s.rollback()
@@ -288,22 +347,47 @@ def run(write: bool = False, current: bool = False, workers: int = 1, ablate: bo
         from ledgerline.db import session
         from ledgerline.models import EvalRun
 
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                             check=False).stdout.strip() or None
+        sha = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+            ).stdout.strip()
+            or None
+        )
         with session() as w:
             run_name = "l2_current" if current else "L2"
             if set_name != "golden":
                 run_name = f"l2_{set_name}" + ("_current" if current else "")
-            w.add(EvalRun(git_sha=sha, layer="L2", name=run_name, metrics=metrics, details={
-                "llm_available": llm.available(), "set": set_name,
-                "annotator": ANNOTATOR if set_name == "golden" else recs[0]["annotator"],
-                **({"unmatched": unmatched, "claim_ids": {
-                    r["id"]: r["source_claim_id"] for r in recs}} if current else {}),
-                "detail": detail, "ablations": ab_metrics, "per_claim": {
-                    rid: {**v, "ablations": {n: abl[n][rid]["label"] for n in abl},
-                          **({"error": full[rid]["error"]} if "error" in full[rid] else {})}
-                    for rid, v in per_claim.items()},
-            }))
+            w.add(
+                EvalRun(
+                    git_sha=sha,
+                    layer="L2",
+                    name=run_name,
+                    metrics=metrics,
+                    details={
+                        "llm_available": llm.available(),
+                        "set": set_name,
+                        "annotator": ANNOTATOR if set_name == "golden" else recs[0]["annotator"],
+                        **(
+                            {
+                                "unmatched": unmatched,
+                                "claim_ids": {r["id"]: r["source_claim_id"] for r in recs},
+                            }
+                            if current
+                            else {}
+                        ),
+                        "detail": detail,
+                        "ablations": ab_metrics,
+                        "per_claim": {
+                            rid: {
+                                **v,
+                                "ablations": {n: abl[n][rid]["label"] for n in abl},
+                                **({"error": full[rid]["error"]} if "error" in full[rid] else {}),
+                            }
+                            for rid, v in per_claim.items()
+                        },
+                    },
+                )
+            )
     return result
 
 
@@ -318,20 +402,44 @@ def positive_int(v: str) -> int:
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.l2")
     p.add_argument("--no-write", action="store_true", help="skip the eval_run row")
-    p.add_argument("--current", action="store_true",
-                   help="score gold labels against the current extractor's claims")
-    p.add_argument("--set", dest="set_name", choices=sorted(SETS), default="golden",
-                   help="labelled claim set (heldout: blind-labelled, never used for tuning)")
-    p.add_argument("--workers", type=positive_int, default=1,
-                   help="parallel claims (online path); capped below the DB pool size")
-    p.add_argument("--no-ablations", action="store_true",
-                   help="skip the ablation re-runs (each is a full online pass)")
+    p.add_argument(
+        "--current",
+        action="store_true",
+        help="score gold labels against the current extractor's claims",
+    )
+    p.add_argument(
+        "--set",
+        dest="set_name",
+        choices=sorted(SETS),
+        default="golden",
+        help="labelled claim set (heldout: blind-labelled, never used for tuning)",
+    )
+    p.add_argument(
+        "--workers",
+        type=positive_int,
+        default=1,
+        help="parallel claims (online path); capped below the DB pool size",
+    )
+    p.add_argument(
+        "--no-ablations",
+        action="store_true",
+        help="skip the ablation re-runs (each is a full online pass)",
+    )
     p.add_argument("--evidence-out", help="save per-claim evidence for `l3 --evidence`")
     a = p.parse_args(argv)
-    print(json.dumps(run(write=not a.no_write, current=a.current, workers=a.workers,
-                         ablate=not a.no_ablations, evidence_out=a.evidence_out,
-                         set_name=a.set_name)["metrics"],
-                     indent=2))
+    print(
+        json.dumps(
+            run(
+                write=not a.no_write,
+                current=a.current,
+                workers=a.workers,
+                ablate=not a.no_ablations,
+                evidence_out=a.evidence_out,
+                set_name=a.set_name,
+            )["metrics"],
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

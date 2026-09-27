@@ -8,13 +8,25 @@ from ledgerline.audio.pipeline import build_turns, locate, segment_text
 from ledgerline.models import CallAudio, Segment
 
 SEGS = [
-    {"start": 0.0, "end": 1.0, "words": [{"w": "Welcome", "s": 0.0, "e": 0.4},
-                                         {"w": "everyone.", "s": 0.5, "e": 1.0}]},
-    {"start": 1.2, "end": 2.0, "words": [{"w": "Ladies", "s": 1.2, "e": 1.5},
-                                         {"w": "and", "s": 1.5, "e": 1.6},
-                                         {"w": "gentlemen.", "s": 1.6, "e": 2.0}]},
-    {"start": 2.5, "end": 3.1, "words": [{"w": "We", "s": 2.5, "e": 2.6},
-                                         {"w": "reported", "s": 2.6, "e": 3.1}]},
+    {
+        "start": 0.0,
+        "end": 1.0,
+        "words": [{"w": "Welcome", "s": 0.0, "e": 0.4}, {"w": "everyone.", "s": 0.5, "e": 1.0}],
+    },
+    {
+        "start": 1.2,
+        "end": 2.0,
+        "words": [
+            {"w": "Ladies", "s": 1.2, "e": 1.5},
+            {"w": "and", "s": 1.5, "e": 1.6},
+            {"w": "gentlemen.", "s": 1.6, "e": 2.0},
+        ],
+    },
+    {
+        "start": 2.5,
+        "end": 3.1,
+        "words": [{"w": "We", "s": 2.5, "e": 2.6}, {"w": "reported", "s": 2.6, "e": 3.1}],
+    },
 ]
 
 
@@ -35,14 +47,30 @@ def test_locate_word_times():
 
 @pytest.mark.db
 def test_every_char_maps_to_segment_and_time(db):
-    call = CallAudio(kind="fomc", storage_path="x", source_url="x", fetched_at=datetime.now(UTC),
-                     sha256="0" * 64, license_note="test")
+    call = CallAudio(
+        kind="fomc",
+        storage_path="x",
+        source_url="x",
+        fetched_at=datetime.now(UTC),
+        sha256="0" * 64,
+        license_note="test",
+    )
     db.add(call)
     db.flush()
     for i, t in enumerate(build_turns(SEGS, [0, 1, 1])):
-        db.add(Segment(call_audio_id=call.id, idx=i, t_start=t["t_start"], t_end=t["t_end"],
-                       speaker_label=t["speaker_label"], role=t["role"], section=t["section"],
-                       text=t["text"], words=t["words"]))
+        db.add(
+            Segment(
+                call_audio_id=call.id,
+                idx=i,
+                t_start=t["t_start"],
+                t_end=t["t_end"],
+                speaker_label=t["speaker_label"],
+                role=t["role"],
+                section=t["section"],
+                text=t["text"],
+                words=t["words"],
+            )
+        )
     db.flush()
     text, spans = segment_text(db, call.id)
     segs = {s.id: s for s in db.query(Segment).filter_by(call_audio_id=call.id)}
@@ -58,6 +86,7 @@ def test_every_char_maps_to_segment_and_time(db):
 
 @pytest.mark.db
 def test_ingest_is_idempotent(db, tmp_path, monkeypatch):
+    pytest.importorskip("av")
     from ledgerline.config import settings
     from ledgerline.ingest.call_audio import ingest_call_audio
 
@@ -65,11 +94,16 @@ def test_ingest_is_idempotent(db, tmp_path, monkeypatch):
     wav = tmp_path / "a.wav"
     # 0.5 s of silence, 16 kHz mono PCM: a valid file without needing ffmpeg.
     import wave
+
     with wave.open(str(wav), "wb") as w:
         w.setnchannels(1), w.setsampwidth(2), w.setframerate(16000)
         w.writeframes(b"\0\0" * 8000)
-    kw = {"kind": "earnings_call", "company_id": None, "event_date": date(2024, 1, 1),
-          "license_note": "test"}
+    kw = {
+        "kind": "earnings_call",
+        "company_id": None,
+        "event_date": date(2024, 1, 1),
+        "license_note": "test",
+    }
     first = ingest_call_audio(db, str(wav), **kw)
     assert ingest_call_audio(db, str(wav), **kw) == first
     assert db.query(CallAudio).filter_by(sha256=db.get(CallAudio, first).sha256).count() == 1
@@ -85,8 +119,22 @@ def test_vad_asr_smoke(tmp_path):
 
     aiff, wav = tmp_path / "x.aiff", tmp_path / "x.wav"
     subprocess.run(["say", "-o", str(aiff), "Revenue grew ten percent this quarter."], check=True)
-    subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(aiff), "-ar", "16000",
-                    "-ac", "1", str(wav)], check=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-i",
+            str(aiff),
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            str(wav),
+        ],
+        check=True,
+    )
     audio = load_audio(str(wav))
     assert speech_spans(audio)
     words = [w for seg in transcribe(audio, "base") for w in seg["words"]]

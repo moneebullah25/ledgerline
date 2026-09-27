@@ -48,8 +48,9 @@ def load_audio(path: str, clip_s: float | None = None) -> np.ndarray:
 def speech_spans(audio: np.ndarray) -> list[tuple[float, float]]:
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-    return [(c["start"] / SR, c["end"] / SR)
-            for c in get_speech_timestamps(audio, VadOptions(**VAD))]
+    return [
+        (c["start"] / SR, c["end"] / SR) for c in get_speech_timestamps(audio, VadOptions(**VAD))
+    ]
 
 
 @lru_cache(maxsize=2)
@@ -63,12 +64,20 @@ def transcribe(audio: np.ndarray, model: str, vad: bool = True) -> list[dict]:
     """Whisper segments as {start, end, words: [{w, s, e}]}; VAD runs inside faster-whisper
     with the same options, and timestamps come back on the original timeline."""
     segs, _ = _whisper(model).transcribe(
-        audio, language="en", word_timestamps=True, vad_filter=vad,
-        vad_parameters=VAD if vad else None, initial_prompt=PROMPT)
+        audio,
+        language="en",
+        word_timestamps=True,
+        vad_filter=vad,
+        vad_parameters=VAD if vad else None,
+        initial_prompt=PROMPT,
+    )
     out = []
     for seg in segs:
-        words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)}
-                 for w in seg.words or [] if w.word.strip()]
+        words = [
+            {"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)}
+            for w in seg.words or []
+            if w.word.strip()
+        ]
         if words:
             out.append({"start": words[0]["s"], "end": words[-1]["e"], "words": words})
     return out
@@ -78,8 +87,10 @@ def transcribe(audio: np.ndarray, model: str, vad: bool = True) -> list[dict]:
 def _speaker_model():
     from transformers import AutoFeatureExtractor, WavLMForXVector
 
-    return (AutoFeatureExtractor.from_pretrained(SPEAKER_MODEL),
-            WavLMForXVector.from_pretrained(SPEAKER_MODEL).eval())
+    return (
+        AutoFeatureExtractor.from_pretrained(SPEAKER_MODEL),
+        WavLMForXVector.from_pretrained(SPEAKER_MODEL).eval(),
+    )
 
 
 def embed_speakers(audio: np.ndarray, segs: list[dict]) -> np.ndarray:
@@ -92,7 +103,7 @@ def embed_speakers(audio: np.ndarray, segs: list[dict]) -> np.ndarray:
     for seg in segs:
         mid = (seg["start"] + seg["end"]) / 2
         half = min(max((seg["end"] - seg["start"]) / 2, 0.75), 3.0)
-        clip = audio[max(0, int((mid - half) * SR)): int((mid + half) * SR)]
+        clip = audio[max(0, int((mid - half) * SR)) : int((mid + half) * SR)]
         with torch.no_grad():
             emb = model(**fx(clip, sampling_rate=SR, return_tensors="pt")).embeddings[0]
         out.append(torch.nn.functional.normalize(emb, dim=-1).numpy())
@@ -104,8 +115,13 @@ def cluster(emb: np.ndarray, threshold: float = SPEAKER_THRESHOLD) -> list[int]:
         return [0] * len(emb)
     from sklearn.cluster import AgglomerativeClustering
 
-    return AgglomerativeClustering(n_clusters=None, metric="cosine", linkage="average",
-                                   distance_threshold=threshold).fit_predict(emb).tolist()
+    return (
+        AgglomerativeClustering(
+            n_clusters=None, metric="cosine", linkage="average", distance_threshold=threshold
+        )
+        .fit_predict(emb)
+        .tolist()
+    )
 
 
 def build_turns(segs: list[dict], labels: list[int]) -> list[dict]:
@@ -122,8 +138,12 @@ def build_turns(segs: list[dict], labels: list[int]) -> list[dict]:
         t["text"] = " ".join(w["w"] for w in t["words"])
         t["t_start"], t["t_end"] = t["words"][0]["s"], t["words"][-1]["e"]
     texts = [t["text"] for t in turns]
-    for t, role, sec in zip(turns, assign_roles(texts, [t["speaker_label"] for t in turns]),
-                            sections(texts), strict=True):
+    for t, role, sec in zip(
+        turns,
+        assign_roles(texts, [t["speaker_label"] for t in turns]),
+        sections(texts),
+        strict=True,
+    ):
         t["role"], t["section"] = role, sec
     return turns
 
@@ -144,8 +164,7 @@ def run(path: str, *, model: str | None = None, clip_s: float | None = None) -> 
     t0 = time.perf_counter()
     labels = cluster(embed_speakers(audio, segs)) if segs else []
     tm["speaker_s"] = time.perf_counter() - t0
-    return Result(build_turns(segs, labels), len(audio) / SR,
-                  sum(e - s for s, e in spans), tm)
+    return Result(build_turns(segs, labels), len(audio) / SR, sum(e - s for s, e in spans), tm)
 
 
 def process_call(s: Session, call_audio_id: int, *, model: str | None = None) -> int:
@@ -157,18 +176,31 @@ def process_call(s: Session, call_audio_id: int, *, model: str | None = None) ->
     call = s.get_one(CallAudio, call_audio_id)
     res = run(str(settings().data_dir / call.storage_path), model=model)
     call.speech_s = res.speech_s
-    s.add_all(Segment(call_audio_id=call_audio_id, idx=i, t_start=t["t_start"],
-                      t_end=t["t_end"], speaker_label=t["speaker_label"], role=t["role"],
-                      section=t["section"], text=t["text"], words=t["words"])
-              for i, t in enumerate(res.turns))
+    s.add_all(
+        Segment(
+            call_audio_id=call_audio_id,
+            idx=i,
+            t_start=t["t_start"],
+            t_end=t["t_end"],
+            speaker_label=t["speaker_label"],
+            role=t["role"],
+            section=t["section"],
+            text=t["text"],
+            words=t["words"],
+        )
+        for i, t in enumerate(res.turns)
+    )
     s.flush()
     return len(res.turns)
 
 
 def segment_text(s: Session, call_audio_id: int) -> tuple[str, list[tuple[int, int, int]]]:
     """Segments joined by newlines, plus (segment_id, char_start, char_end) per segment."""
-    rows = s.execute(select(Segment.id, Segment.text).where(Segment.call_audio_id == call_audio_id)
-                     .order_by(Segment.idx)).all()
+    rows = s.execute(
+        select(Segment.id, Segment.text)
+        .where(Segment.call_audio_id == call_audio_id)
+        .order_by(Segment.idx)
+    ).all()
     spans, pos = [], 0
     for seg_id, text in rows:
         spans.append((seg_id, pos, pos + len(text)))

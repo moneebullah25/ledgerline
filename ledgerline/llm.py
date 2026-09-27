@@ -51,8 +51,10 @@ class Usage:
             return 0.0
         i, o, r, w = PRICES[self.model]
         return (
-            self.input_tokens * i + self.output_tokens * o
-            + self.cache_read_tokens * r + self.cache_write_tokens * w
+            self.input_tokens * i
+            + self.output_tokens * o
+            + self.cache_read_tokens * r
+            + self.cache_write_tokens * w
         ) / 1e6
 
     def __add__(self, other: "Usage") -> "Usage":
@@ -83,7 +85,9 @@ class RateLimited(LLMUnavailable):
 def _bad_output(model: str, schema: type[BaseModel], detail: str = "") -> ValueError:
     """A refusal or unparseable answer. The message reaches the public API (tracing
     error_summary), so it carries no model output; that goes to the log."""
-    return ValueError(f"{model} returned no valid {schema.__name__}" + (f" ({detail})" if detail else ""))
+    return ValueError(
+        f"{model} returned no valid {schema.__name__}" + (f" ({detail})" if detail else "")
+    )
 
 
 def available() -> bool:
@@ -112,7 +116,11 @@ def _client():
 
 
 def structured[T: BaseModel](
-    tier: str, system: str, data: dict[str, str], instruction: str, schema: type[T],
+    tier: str,
+    system: str,
+    data: dict[str, str],
+    instruction: str,
+    schema: type[T],
     max_tokens: int = 4000,
 ) -> tuple[T, Usage]:
     """One schema-constrained call. `data` maps a label to untrusted text; each is wrapped
@@ -171,19 +179,36 @@ RETRY_WAITS_S = (15, 60, 180, 600)
 # ordinary text.
 _TRANSIENT = re.compile(
     r"rate[ _]limit|overloaded|usage limit|session limit"
-    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:429|529)\b")
+    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:429|529)\b"
+)
 _AUTH = re.compile(
     r"invalid api key|/login|not logged in|authentication_error|oauth token|credit balance"
-    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:401|403)\b")
+    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:401|403)\b"
+)
 # The child gets only what it needs to find its own login; never our DB URL or API keys.
 _CHILD_ENV = ("HOME", "PATH", "USER", "TMPDIR", "LANG")
 
 
 def _cli_argv(model: str, system: str, schema: type[BaseModel]) -> list[str]:
-    return [settings().claude_bin, "-p", "--model", model, "--system-prompt", system,
-            "--strict-mcp-config", "--tools", "", "--no-session-persistence",
-            "--setting-sources", "", "--disable-slash-commands", "--output-format", "json",
-            "--json-schema", json.dumps(schema.model_json_schema())]
+    return [
+        settings().claude_bin,
+        "-p",
+        "--model",
+        model,
+        "--system-prompt",
+        system,
+        "--strict-mcp-config",
+        "--tools",
+        "",
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+        "--disable-slash-commands",
+        "--output-format",
+        "json",
+        "--json-schema",
+        json.dumps(schema.model_json_schema()),
+    ]
 
 
 def _run_cli(argv: list[str], prompt: str) -> tuple[dict, str]:
@@ -193,7 +218,12 @@ def _run_cli(argv: list[str], prompt: str) -> tuple[dict, str]:
     with tempfile.TemporaryDirectory(prefix="ledgerline-cli-") as cwd:
         try:
             proc = subprocess.run(
-                argv, input=prompt, capture_output=True, text=True, cwd=cwd, env=env,
+                argv,
+                input=prompt,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
+                env=env,
                 timeout=CLI_TIMEOUT_S,
                 check=False,  # a non-zero exit still prints the JSON error we classify below
             )
@@ -214,7 +244,10 @@ def _run_cli(argv: list[str], prompt: str) -> tuple[dict, str]:
 
 
 def _structured_cli[T: BaseModel](
-    model: str, system: str, prompt: str, schema: type[T],
+    model: str,
+    system: str,
+    prompt: str,
+    schema: type[T],
 ) -> tuple[T, Usage]:
     """The same call through `claude -p`: our system prompt replaces the CLI's, every tool,
     setting source, slash command and session file is off, and the process runs in an empty

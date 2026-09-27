@@ -81,24 +81,57 @@ EPS_HALF_CENT = 0.005
 _SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
 _PCT = re.compile(
-    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?%|\s(?:percent|percentage points?|points?|pts)\b)")
-_BPS = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)[\s-]?(?:basis[\s-]points?|bps)\b",
-                  re.IGNORECASE)
+    r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)(?:\s?%|\s(?:percent|percentage points?|points?|pts)\b)"
+)
+_BPS = re.compile(r"(?<![\w.])(\d[\d,]*(?:\.\d+)?)[\s-]?(?:basis[\s-]points?|bps)\b", re.IGNORECASE)
 _TOKEN = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.(\d+))?")
 _SIGNED = {"net_income", "operating_income", "eps_diluted", "free_cash_flow"}
-_LOSS = re.compile(r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss (?:per|from operations)\b",
-                   re.IGNORECASE)
+_LOSS = re.compile(
+    r"\b(?:net|operating)\s+loss(?:es)?\b|\bloss (?:per|from operations)\b", re.IGNORECASE
+)
 _INCOME = re.compile(r"\b(?:income|earnings|profit)\b", re.IGNORECASE)
 _FLAT = re.compile(r"\bflat\b", re.IGNORECASE)
-_WORDS = dict(enumerate(["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]))
+_WORDS = dict(
+    enumerate(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+            "twenty",
+        ]
+    )
+)
 # ponytail: cue words only; "revenue including acquisitions was $5B" also reads as a part.
-_PART_BEFORE = re.compile(r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charges?|effects?"
-                          r"|contribut\w*)\b[^,;$%]*$", re.IGNORECASE)
+_PART_BEFORE = re.compile(
+    r"\b(?:includ(?:e|es|ed|ing)|impacts?|benefits?|charges?|effects?"
+    r"|contribut\w*)\b[^,;$%]*$",
+    re.IGNORECASE,
+)
 _PART_AFTER = re.compile(r"^\s*of\s+(?:\w+\s+){0,2}(?:earnings per share|eps)\b", re.IGNORECASE)
 _COMPANY_DEFINED = {"free_cash_flow"}
 # "revenues exceeded $400 billion", "grew more than 20%": a floor, not a point estimate.
-_FLOOR = re.compile(r"\b(?:exceed(?:ed|s|ing)?|more than|over|above|surpass(?:ed|es|ing)?|top(?:s|ped|ping)?"
-                    r"|in excess of)\s*$", re.IGNORECASE)
+_FLOOR = re.compile(
+    r"\b(?:exceed(?:ed|s|ing)?|more than|over|above|surpass(?:ed|es|ing)?|top(?:s|ped|ping)?"
+    r"|in excess of)\s*$",
+    re.IGNORECASE,
+)
 
 
 def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
@@ -107,8 +140,11 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
     5%" printed the 5 with no decimals). 0 when no printed number matches the value."""
     toks = [(m.group(), 1.0) for m in _TOKEN.finditer(text)]
     if unit == "percent":  # a basis point is a hundredth of a point
-        toks = ([(m.group(1), 0.01) for m in _BPS.finditer(text)]
-                + [(m.group(1), 1.0) for m in _PCT.finditer(text)] + toks)
+        toks = (
+            [(m.group(1), 0.01) for m in _BPS.finditer(text)]
+            + [(m.group(1), 1.0) for m in _PCT.finditer(text)]
+            + toks
+        )
     for tok, per in toks:
         x = abs(float(tok.replace(",", ""))) * per
         for scale in _SCALES:
@@ -118,8 +154,12 @@ def printed_half_ulp(text: str, value: float, unit: str | None = None) -> float:
         return 0.5
     # "an increase of two percent": a spelled-out number prints whole units
     _iv = round(abs(value))
-    if unit == "percent" and _iv in _WORDS and math.isclose(abs(value), _iv) and re.search(
-            rf"\b{_WORDS[_iv]}\b", text, re.IGNORECASE):
+    if (
+        unit == "percent"
+        and _iv in _WORDS
+        and math.isclose(abs(value), _iv)
+        and re.search(rf"\b{_WORDS[_iv]}\b", text, re.IGNORECASE)
+    ):
         return 0.5
     return 0.0
 
@@ -168,8 +208,9 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, U
     with lock:
         facts = [get_xbrl_fact(s, ctx.cik, claim.metric, fy, fp) for fy, fp in ps]
         if claim.metric == "eps_diluted" and len(ps) == 2:
-            facts = split_adjusted(facts, [get_xbrl_fact(s, ctx.cik, "net_income", fy, fp)
-                                           for fy, fp in ps])
+            facts = split_adjusted(
+                facts, [get_xbrl_fact(s, ctx.cik, "net_income", fy, fp) for fy, fp in ps]
+            )
     return assess(claim, facts), OFFLINE
 
 
@@ -198,8 +239,13 @@ def _insufficient(why: str, **payload) -> EvidenceItem:
 def _cite(f: Fact) -> list[Citation]:
     if f.components:  # each component with its own value, then the computed ratio/diff
         return [c for x in f.components for c in _cite(x)] + [
-            Citation(kind="computed", ref_id=f"{f.concept}:{f.fiscal_year}{f.fiscal_period}",
-                     value=f.value, unit=f.unit)]
+            Citation(
+                kind="computed",
+                ref_id=f"{f.concept}:{f.fiscal_year}{f.fiscal_period}",
+                value=f.value,
+                unit=f.unit,
+            )
+        ]
     return [Citation(kind="xbrl_fact", ref_id=i, value=f.value, unit=f.unit) for i in f.fact_ids]
 
 
@@ -210,9 +256,15 @@ def _label(f: Fact) -> str:
 def _claimed_spans(claim: Claim) -> list[Value]:
     """The printed values in the claim text that are the claim's value (or range end)."""
     claimed = [abs(float(x)) for x in (claim.value, claim.value_high) if x is not None]
-    return [v for v in parse_values(claim.text)
-            if any(x is not None and math.isclose(abs(x), c, rel_tol=1e-6)
-                   for x in (v.value, v.value_high) for c in claimed)]
+    return [
+        v
+        for v in parse_values(claim.text)
+        if any(
+            x is not None and math.isclose(abs(x), c, rel_tol=1e-6)
+            for x in (v.value, v.value_high)
+            for c in claimed
+        )
+    ]
 
 
 def _loss_claim(claim: Claim) -> bool:
@@ -224,23 +276,29 @@ def _loss_claim(claim: Claim) -> bool:
     if not spans:  # value not found in the text: fall back to the whole sentence
         return bool(_LOSS.search(claim.text)) and not _INCOME.search(claim.text)
     v = spans[0]
-    phrases = [(v.start - m.end() if m.end() <= v.start else m.start() - v.end, rx is _LOSS)
-               for rx in (_LOSS, _INCOME) for m in rx.finditer(claim.text)
-               if m.end() <= v.start or m.start() >= v.end]
+    phrases = [
+        (v.start - m.end() if m.end() <= v.start else m.start() - v.end, rx is _LOSS)
+        for rx in (_LOSS, _INCOME)
+        for m in rx.finditer(claim.text)
+        if m.end() <= v.start or m.start() >= v.end
+    ]
     return min(phrases)[1] if phrases else False
 
 
 def _is_part(claim: Claim) -> bool:
     """Is the claimed number a component of the metric rather than its total?"""
-    return any(_PART_BEFORE.search(claim.text[:v.start]) or _PART_AFTER.match(claim.text[v.end:])
-               for v in _claimed_spans(claim))
+    return any(
+        _PART_BEFORE.search(claim.text[: v.start]) or _PART_AFTER.match(claim.text[v.end :])
+        for v in _claimed_spans(claim)
+    )
 
 
 def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     """Pure comparison of the claim against pre-fetched facts ([target] or [target, base])."""
     if _is_part(claim):
-        return _insufficient(f"the claimed figure is a component of {claim.metric}, "
-                             "not the filed total")
+        return _insufficient(
+            f"the claimed figure is a component of {claim.metric}, not the filed total"
+        )
     if any(f is None for f in facts):
         return _insufficient(
             f"no filed XBRL fact for {claim.metric} in the needed period(s)",
@@ -255,10 +313,14 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     if claim.comparison is None and lo > 0 and loss:
         lo, hi = -hi, -lo
     # A floor: anything above it is consistent; the tolerance still applies below it.
-    floor = lo >= 0 and not loss and any(_FLOOR.search(claim.text[:v.start])
-                                         for v in _claimed_spans(claim))
-    half_ulp = max(printed_half_ulp(claim.text, lo, claim.unit),
-                   printed_half_ulp(claim.text, hi, claim.unit))
+    floor = (
+        lo >= 0
+        and not loss
+        and any(_FLOOR.search(claim.text[: v.start]) for v in _claimed_spans(claim))
+    )
+    half_ulp = max(
+        printed_half_ulp(claim.text, lo, claim.unit), printed_half_ulp(claim.text, hi, claim.unit)
+    )
     cur = facts[0]
     derived = any(f.derived for f in facts)
     cites = [c for f in facts for c in _cite(f)]
@@ -284,7 +346,7 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
             if unit == "USD/share":
                 # EPS is filed to the cent; the company's percent comes from unrounded
                 # figures ($1.70 vs $1.33 is +27.8%, PepsiCo prints 27%). Half a cent on each.
-                tol += 100 * EPS_HALF_CENT * (abs(cur_v) + abs(base_v)) / base_v ** 2
+                tol += 100 * EPS_HALF_CENT * (abs(cur_v) + abs(base_v)) / base_v**2
         elif claim.unit == "percent":  # margin points
             actual = cur.value - base.value
             tol = PP_TOL + half_ulp
@@ -293,7 +355,9 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
             tol = REL_TOL * (abs(cur.value) + abs(base.value)) + half_ulp
         nearest = min(max(actual, lo), math.inf if floor else hi)
         err = nearest - actual
-        deviation = err / 100 if claim.unit == "percent" else (err / abs(actual) if actual else None)
+        deviation = (
+            err / 100 if claim.unit == "percent" else (err / abs(actual) if actual else None)
+        )
         what = f"{claim.comparison} change from filed {_label(base)} to {_label(cur)}"
         ref += f":{claim.comparison}_change"
         cites.append(Citation(kind="computed", ref_id=ref, value=actual, unit=claim.unit))
@@ -302,29 +366,52 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
     ok = abs(err) <= tol
     # Same sign only: a loss claimed against a filed profit (or the reverse) is a real
     # contradiction, not a misread scale.
-    if (not ok and claim.claim_type == "reported_result" and claim.comparison is None
-            and unit in _GAP_UNITS and lo * actual > 0 and abs(deviation) > IMPLAUSIBLE_GAP):
+    if (
+        not ok
+        and claim.claim_type == "reported_result"
+        and claim.comparison is None
+        and unit in _GAP_UNITS
+        and lo * actual > 0
+        and abs(deviation) > IMPLAUSIBLE_GAP
+    ):
         gap = abs(deviation) * 100
         return EvidenceItem(
-            agent="xbrl_table", stance="insufficient",
-            summary=(f"claimed value is {gap:.0f}% from the {what}: more likely a period or "
-                     "scope misreading than a misstatement"),
-            citations=[*cites[:-1],  # the facts, minus the tolerance
-                       Citation(kind="computed", ref_id=f"{ref}:gap_pct", value=gap,
-                                unit="percent")],
-            payload={"implausible_gap": True, "gap_pct": gap, "actual": actual,
-                     "deviation": deviation})
+            agent="xbrl_table",
+            stance="insufficient",
+            summary=(
+                f"claimed value is {gap:.0f}% from the {what}: more likely a period or "
+                "scope misreading than a misstatement"
+            ),
+            citations=[
+                *cites[:-1],  # the facts, minus the tolerance
+                Citation(kind="computed", ref_id=f"{ref}:gap_pct", value=gap, unit="percent"),
+            ],
+            payload={
+                "implausible_gap": True,
+                "gap_pct": gap,
+                "actual": actual,
+                "deviation": deviation,
+            },
+        )
     if not ok and claim.metric in _COMPANY_DEFINED:
-        return _insufficient(f"{claim.metric} is company-defined; the derived definition does "
-                             "not match and no filed fact carries the company's", actual=actual)
+        return _insufficient(
+            f"{claim.metric} is company-defined; the derived definition does "
+            "not match and no filed fact carries the company's",
+            actual=actual,
+        )
     return EvidenceItem(
         agent="xbrl_table",
         stance="supports" if ok else "contradicts",
         summary=f"Claimed value is {'within' if ok else 'outside'} tolerance of the {what}.",
         citations=cites,
         payload={
-            "actual": actual, "claimed_low": lo, "claimed_high": hi, "tolerance": tol,
-            "deviation": deviation, "tol_used": abs(err) / max(tol, 1e-12),
-            "derived": derived, "periods": [[f.fiscal_year, f.fiscal_period] for f in facts],
+            "actual": actual,
+            "claimed_low": lo,
+            "claimed_high": hi,
+            "tolerance": tol,
+            "deviation": deviation,
+            "tol_used": abs(err) / max(tol, 1e-12),
+            "derived": derived,
+            "periods": [[f.fiscal_year, f.fiscal_period] for f in facts],
         },
     )

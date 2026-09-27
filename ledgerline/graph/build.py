@@ -49,15 +49,21 @@ class VerifyResult:
 
 
 def _record(attrs: dict, u: llm.Usage) -> None:
-    attrs |= {"model": u.model, "input_tokens": u.input_tokens, "output_tokens": u.output_tokens,
-              "cache_read_tokens": u.cache_read_tokens, "cost_usd": u.cost_usd}
+    attrs |= {
+        "model": u.model,
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "cache_read_tokens": u.cache_read_tokens,
+        "cost_usd": u.cost_usd,
+    }
 
 
 def _router(state: GraphState, config) -> dict:
     ctx = state["ctx"]
     with config["configurable"]["tracer"].span("router") as a:
-        agents = route(state["claim"], event_date=ctx.event_date,
-                       reported_through=ctx.reported_through)
+        agents = route(
+            state["claim"], event_date=ctx.event_date, reported_through=ctx.reported_through
+        )
         a["agents"] = agents
     return {"agents": agents}
 
@@ -74,13 +80,18 @@ def _agent_node(name: AgentName):
         try:
             with t.span(f"agent.{name}") as a:
                 agent = config["configurable"].get("agents", AGENTS)[name]
-                ev, usage = agent(config["configurable"]["session"], state["claim"],
-                                  state["ctx"], state["ctx"].db_lock)
+                ev, usage = agent(
+                    config["configurable"]["session"],
+                    state["claim"],
+                    state["ctx"],
+                    state["ctx"].db_lock,
+                )
                 _record(a, usage)
                 a["stance"] = ev.stance
         finally:
             parent.spans.extend(t.spans)
         return {"evidence": [ev], "usages": [(name, usage)]}
+
     return node
 
 
@@ -95,26 +106,32 @@ def _refusal_check(state: GraphState, config) -> dict:
         gap = next((e for e in truth if e.payload.get("implausible_gap")), None)
         if gap is not None:  # L2: say why the filed fact was not ruled on, citing it and the gap
             cites = gap.citations
-            rationale = (f"Unverifiable. The filed fact differs from the claimed value by "
-                         f"{gap.payload['gap_pct']:.0f}%, likely a period or scope misreading "
-                         "rather than a misstatement, so it is not ruled on.")
+            rationale = (
+                f"Unverifiable. The filed fact differs from the claimed value by "
+                f"{gap.payload['gap_pct']:.0f}%, likely a period or scope misreading "
+                "rather than a misstatement, so it is not ruled on."
+            )
         else:
             cites = []
             checked = ", ".join(e.agent for e in truth) or "none"
-            rationale = ("Unverifiable. No truth-bearing agent found evidence that supports or "
-                         f"contradicts the claim (checked: {checked}).")
+            rationale = (
+                "Unverifiable. No truth-bearing agent found evidence that supports or "
+                f"contradicts the claim (checked: {checked})."
+            )
         if problems := adjudicator.audit(rationale, cites, state["claim"].text):
             raise adjudicator.IntegrityError(f"refusal rationale failed audit: {problems}")
         # Confidence 1.0: the refusal is a mechanical fact about the evidence, not a judgment.
-        verdict = VerdictDraft(label="unverifiable", confidence=1.0, rationale=rationale,
-                               citations=cites)
+        verdict = VerdictDraft(
+            label="unverifiable", confidence=1.0, rationale=rationale, citations=cites
+        )
         return {"refused": True, "verdict": verdict, "critic": None, "model": None}
 
 
 def _critic(state: GraphState, config) -> dict:
     with config["configurable"]["tracer"].span("critic") as a:
-        out, usage = critic.critique(state["claim"], state["evidence"],
-                                     config["configurable"].get("offline", False))
+        out, usage = critic.critique(
+            state["claim"], state["evidence"], config["configurable"].get("offline", False)
+        )
         _record(a, usage)
         a["counter_stance"], a["weakest_evidence"] = out.counter_stance, out.weakest_evidence
     return {"critic": out, "usages": [("critic", usage)]}
@@ -122,9 +139,12 @@ def _critic(state: GraphState, config) -> dict:
 
 def _adjudicator(state: GraphState, config) -> dict:
     with config["configurable"]["tracer"].span("adjudicator") as a:
-        verdict, usage, model = adjudicator.adjudicate(state["claim"], state["evidence"],
-                                                       state["critic"],
-                                                       config["configurable"].get("offline", False))
+        verdict, usage, model = adjudicator.adjudicate(
+            state["claim"],
+            state["evidence"],
+            state["critic"],
+            config["configurable"].get("offline", False),
+        )
         _record(a, usage)
         a["label"], a["confidence"] = verdict.label, verdict.confidence
     return {"verdict": verdict, "model": model, "usages": [("adjudicator", usage)]}
@@ -142,8 +162,9 @@ def graph():
     g.add_node("adjudicator", _adjudicator)
     g.add_edge(START, "router")
     g.add_conditional_edges("router", _fan_out, list(AGENTS))
-    g.add_conditional_edges("refusal_check", lambda st: END if st["refused"] else "critic",
-                            ["critic", END])
+    g.add_conditional_edges(
+        "refusal_check", lambda st: END if st["refused"] else "critic", ["critic", END]
+    )
     g.add_edge("critic", "adjudicator")
     g.add_edge("adjudicator", END)
     return g.compile()
@@ -155,19 +176,37 @@ def context(s: Session, claim: Claim) -> Ctx:
     if claim.filing_id is not None:
         event_date = s.get(Filing, claim.filing_id).filed_at
     elif claim.segment_id is not None:
-        event_date = s.scalar(select(CallAudio.event_date).join(
-            Segment, Segment.call_audio_id == CallAudio.id).where(Segment.id == claim.segment_id))
-    periods = s.execute(select(Filing.fiscal_year, Filing.fiscal_period).where(
-        Filing.company_id == claim.company_id, Filing.form_type.in_(filing_rag.PERIODIC),
-        Filing.fiscal_year.is_not(None), Filing.fiscal_period.is_not(None))).all()
+        event_date = s.scalar(
+            select(CallAudio.event_date)
+            .join(Segment, Segment.call_audio_id == CallAudio.id)
+            .where(Segment.id == claim.segment_id)
+        )
+    periods = s.execute(
+        select(Filing.fiscal_year, Filing.fiscal_period).where(
+            Filing.company_id == claim.company_id,
+            Filing.form_type.in_(filing_rag.PERIODIC),
+            Filing.fiscal_year.is_not(None),
+            Filing.fiscal_period.is_not(None),
+        )
+    ).all()
     reported = max(periods, key=lambda p: period_key(*p), default=None)
-    return Ctx(company.id, company.cik, company.ticker, event_date,
-               tuple(reported) if reported else None, Lock())
+    return Ctx(
+        company.id,
+        company.cik,
+        company.ticker,
+        event_date,
+        tuple(reported) if reported else None,
+        Lock(),
+    )
 
 
-def verify_claim(s: Session, claim: Claim, tracer: Tracer,
-                 agents: dict[AgentName, AgentFn] | None = None,
-                 offline: bool = False) -> VerifyResult:
+def verify_claim(
+    s: Session,
+    claim: Claim,
+    tracer: Tracer,
+    agents: dict[AgentName, AgentFn] | None = None,
+    offline: bool = False,
+) -> VerifyResult:
     """agents replaces entries of AGENTS for this call only (evaluation ablations); passed
     through the graph config, so concurrent calls do not share a patched global. offline
     forces the deterministic critic and adjudicator (the pipeline's budget guard, NFR-3)."""
@@ -178,8 +217,14 @@ def verify_claim(s: Session, claim: Claim, tracer: Tracer,
     with tracer.span("verify_claim", claim_id=claim.id) as a:
         out = graph().invoke(
             {"claim": claim, "ctx": context(s, claim), "evidence": [], "usages": []},
-            config={"configurable": {"session": s, "tracer": tracer,
-                                     "agents": AGENTS | (agents or {}), "offline": offline}},
+            config={
+                "configurable": {
+                    "session": s,
+                    "tracer": tracer,
+                    "agents": AGENTS | (agents or {}),
+                    "offline": offline,
+                }
+            },
         )
         usages = out["usages"]
         cost = sum(u.cost_usd for _, u in usages)

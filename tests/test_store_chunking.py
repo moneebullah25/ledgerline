@@ -9,15 +9,17 @@ TEN_Q = (Path(__file__).parent / "fixtures" / "aapl_10q_excerpt.txt").read_text(
 
 def test_offsets_are_exact_slices():
     for c in chunk_document(TEN_Q, "10-Q", max_tokens=60, overlap=10):
-        assert TEN_Q[c.char_start:c.char_end] == c.text
+        assert TEN_Q[c.char_start : c.char_end] == c.text
         assert c.text.strip() and c.token_count <= 60
 
 
 def test_toc_does_not_create_sections():
     paths = [p for _, p in _periodic_sections(TEN_Q)]
     assert len(paths) == len(set(paths))  # the TOC repeats every header; each kept once
-    assert "Part I > Item 2. Management’s Discussion and Analysis of Financial Condition " \
-           "and Results of Operations" in paths
+    assert (
+        "Part I > Item 2. Management’s Discussion and Analysis of Financial Condition "
+        "and Results of Operations" in paths
+    )
     assert "Part II > Item 1A. Risk Factors" in paths
     chunks = chunk_document(TEN_Q, "10-Q")
     toc = TEN_Q.index("TABLE OF CONTENTS")
@@ -32,56 +34,78 @@ def test_chunks_never_cross_sections_and_overlap_within_them():
     for c in chunks:
         # every chunk lies strictly inside one [boundary, next boundary) interval
         assert any(a <= c.char_start and c.char_end <= b for a, b in itertools.pairwise(bounds))
-    same_section = [(a, b) for a, b in itertools.pairwise(chunks)
-                    if a.section_path == b.section_path]
+    same_section = [
+        (a, b) for a, b in itertools.pairwise(chunks) if a.section_path == b.section_path
+    ]
     assert same_section and any(b.char_start < a.char_end for a, b in same_section)
     assert all(b.char_start > a.char_start for a, b in same_section)  # always progresses
 
 
 def test_cross_reference_is_not_a_header():
-    text = ("PART I Financial Information\nItem 2. Results\nSee Part I,\n"
-            "Item 1A of the 2025 Form 10-K for risks.\nPart II of this report\nNet sales rose.\n")
+    text = (
+        "PART I Financial Information\nItem 2. Results\nSee Part I,\n"
+        "Item 1A of the 2025 Form 10-K for risks.\nPart II of this report\nNet sales rose.\n"
+    )
     assert [p for _, p in _periodic_sections(text)] == ["Part I", "Part I > Item 2. Results"]
 
 
 def test_press_release_headings_and_run_on_split():
     para = "Revenue grew strongly in every region this quarter. " * 6
-    text = (f"Company reports results\n{para}\nCONDENSED CONSOLIDATED BALANCE SHEETS\n"
-            f"Cash\n1,234\n{'word ' * 2000}\n")
+    text = (
+        f"Company reports results\n{para}\nCONDENSED CONSOLIDATED BALANCE SHEETS\n"
+        f"Cash\n1,234\n{'word ' * 2000}\n"
+    )
     chunks = chunk_document(text, "8-K")
     assert {c.section_path for c in chunks} == {
-        "Company reports results", "CONDENSED CONSOLIDATED BALANCE SHEETS"}
+        "Company reports results",
+        "CONDENSED CONSOLIDATED BALANCE SHEETS",
+    }
     assert all(c.token_count <= 800 for c in chunks)
-    assert all(text[c.char_start:c.char_end] == c.text for c in chunks)
+    assert all(text[c.char_start : c.char_end] == c.text for c in chunks)
 
 
 def test_toc_with_titles_on_next_line():
-    text = ("TABLE OF CONTENTS\nPart I\nItem 1.\nFinancial Statements\n1\nItem 2.\nMD&A\n9\n"
-            "PART I — FINANCIAL INFORMATION\nItem 1. Financial Statements\nSales | 5\n"
-            "Item 2.\nMD&A\nSales grew.\n")
+    text = (
+        "TABLE OF CONTENTS\nPart I\nItem 1.\nFinancial Statements\n1\nItem 2.\nMD&A\n9\n"
+        "PART I — FINANCIAL INFORMATION\nItem 1. Financial Statements\nSales | 5\n"
+        "Item 2.\nMD&A\nSales grew.\n"
+    )
     secs = _periodic_sections(text)
-    assert [p for _, p in secs] == ["Part I", "Part I > Item 1. Financial Statements",
-                                    "Part I > Item 2. MD&A"]
+    assert [p for _, p in secs] == [
+        "Part I",
+        "Part I > Item 1. Financial Statements",
+        "Part I > Item 2. MD&A",
+    ]
     assert secs[0][0] == text.index("PART I —")
 
 
 def test_out_of_order_toc_copies_are_dropped():
     body = "Revenue rose because customers bought more of everything we sell. " * 3
-    text = ("Item 7. Management's Discussion and Analysis\nSee page 40 for the discussion of "
-            "results, liquidity and capital resources, and critical estimates.\n"
-            f"PART I\nItem 1. Business\n{body}\nPART II\nItem 7. Management's Discussion "
-            f"and Analysis\n{body}\n")
+    text = (
+        "Item 7. Management's Discussion and Analysis\nSee page 40 for the discussion of "
+        "results, liquidity and capital resources, and critical estimates.\n"
+        f"PART I\nItem 1. Business\n{body}\nPART II\nItem 7. Management's Discussion "
+        f"and Analysis\n{body}\n"
+    )
     assert [p for _, p in _periodic_sections(text)] == [
-        "Part I", "Part I > Item 1. Business", "Part II",
-        "Part II > Item 7. Management's Discussion and Analysis"]
+        "Part I",
+        "Part I > Item 1. Business",
+        "Part II",
+        "Part II > Item 7. Management's Discussion and Analysis",
+    ]
 
 
 def test_running_page_header_is_not_a_section():
-    text = ("PART I\nItem 1. Business\nWe sell things to customers worldwide.\n"
-            "PART I\nItem 1\nMore about the business on the next page.\n"
-            "Item 1A. Risk Factors\nThings can go wrong.\n")
+    text = (
+        "PART I\nItem 1. Business\nWe sell things to customers worldwide.\n"
+        "PART I\nItem 1\nMore about the business on the next page.\n"
+        "Item 1A. Risk Factors\nThings can go wrong.\n"
+    )
     assert [p for _, p in _periodic_sections(text)] == [
-        "Part I", "Part I > Item 1. Business", "Part I > Item 1A. Risk Factors"]
+        "Part I",
+        "Part I > Item 1. Business",
+        "Part I > Item 1A. Risk Factors",
+    ]
 
 
 def test_bare_item_with_title_out_of_reach_is_skipped():
@@ -92,9 +116,11 @@ def test_bare_item_with_title_out_of_reach_is_skipped():
 
 def test_filing_without_item_headers_falls_back_to_headings():
     para = "Revenue grew in every segment this quarter, led by data center products. " * 4
-    text = (f"Intel Corporation\nForward-Looking Statements\n{para}\nResults of Operations\n"
-            f"{para}\n{'filler ' * 400}\nForm 10-Q Cross-Reference Index\n"
-            "Item 2. | Management's Discussion and Analysis | Pages 28 - 40\n")
+    text = (
+        f"Intel Corporation\nForward-Looking Statements\n{para}\nResults of Operations\n"
+        f"{para}\n{'filler ' * 400}\nForm 10-Q Cross-Reference Index\n"
+        "Item 2. | Management's Discussion and Analysis | Pages 28 - 40\n"
+    )
     paths = {c.section_path for c in chunk_document(text, "10-Q")}
     assert {"Forward-Looking Statements", "Results of Operations"} <= paths
     assert not any("Item 2." in p for p in paths)

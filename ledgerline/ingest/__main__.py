@@ -24,9 +24,11 @@ def main() -> None:
 
     tickers = list(UNIVERSE) if args.all else args.ticker
     t0 = time.monotonic()
-    for name, result in (("filings", run_filings(tickers, args.quarters)),
-                         ("facts", run_facts(tickers)),
-                         ("prices", run_prices(tickers))):
+    for name, result in (
+        ("filings", run_filings(tickers, args.quarters)),
+        ("facts", run_facts(tickers)),
+        ("prices", run_prices(tickers)),
+    ):
         print(f"{name}: {result}  (inserted {sum(v or 0 for v in result.values())})", flush=True)
     print(f"elapsed {time.monotonic() - t0:.1f}s")
 

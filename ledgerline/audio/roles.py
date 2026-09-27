@@ -11,38 +11,69 @@ from collections import Counter
 # (cue, role of the speaker saying it, role of the next speaker)
 _I = re.IGNORECASE
 _SEEDS: list[tuple[re.Pattern, str | None, str | None]] = [
-    (re.compile(r"\b(first|next|last|final|following) question (comes|is coming|is) from", _I),
-     "operator", "analyst"),
-    (re.compile(r"\bpress (star|\*) ?(one|1)\b|\bladies and gentlemen\b"
-                r"|\bthis concludes (today's|our|the) (conference|call|program)", _I),
-     "operator", None),
+    (
+        re.compile(r"\b(first|next|last|final|following) question (comes|is coming|is) from", _I),
+        "operator",
+        "analyst",
+    ),
+    (
+        re.compile(
+            r"\bpress (star|\*) ?(one|1)\b|\bladies and gentlemen\b"
+            r"|\bthis concludes (today's|our|the) (conference|call|program)",
+            _I,
+        ),
+        "operator",
+        None,
+    ),
     # "turn the call over to X, our CFO" -> X is an executive; handing back to the operator
     # says nothing about the next speaker.
-    (re.compile(r"\bturn (the call |it |things )?(back )?over to (?!(the )?operator)", _I),
-     None, "executive"),
+    (
+        re.compile(r"\bturn (the call |it |things )?(back )?over to (?!(the )?operator)", _I),
+        None,
+        "executive",
+    ),
     # Separate cues so a statement that has several counts as several votes.
     (re.compile(r"\blook forward to (your|taking your) questions", _I), "executive", None),
     (re.compile(r"\bmy colleagues and I\b", _I), "executive", None),
     (re.compile(r"\bwe (reported|delivered|generated|achieved)\b", _I), "executive", None),
-    (re.compile(r"\bthanks? (you )?for taking (my|our|the) questions?"
-                r"|\b(thank you|thanks),? (mr\.? chair(man)?|madam chair|chair \w+)\b", _I),
-     "analyst", None),
+    (
+        re.compile(
+            r"\bthanks? (you )?for taking (my|our|the) questions?"
+            r"|\b(thank you|thanks),? (mr\.? chair(man)?|madam chair|chair \w+)\b",
+            _I,
+        ),
+        "analyst",
+        None,
+    ),
     # FOMC reporters open with "Steve Liesman, CNBC." / "Howard Schneider with Reuters."
     # (case-sensitive on purpose).
-    (re.compile(r"^\W*(?:(?:hi|thank you|thanks)[.,]?\s+)?[A-Z][a-z]+ [A-Z][\w'-]+"
-                r"(?: [A-Z][\w'-]+)?(?:,| with| at| from) (?:with |from )?(?:the )?[A-Z]"),
-     "analyst", None),
+    (
+        re.compile(
+            r"^\W*(?:(?:hi|thank you|thanks)[.,]?\s+)?[A-Z][a-z]+ [A-Z][\w'-]+"
+            r"(?: [A-Z][\w'-]+)?(?:,| with| at| from) (?:with |from )?(?:the )?[A-Z]"
+        ),
+        "analyst",
+        None,
+    ),
     # FOMC moderator calls on a reporter by name: "Steve." / "Thank you. Nick."
-    (re.compile(r"^\W*(?:(?:thank you|thanks|okay)[.,]?\s+)?"
-                r"(?!(?:Okay|Yes|No|Thanks|Thank|Right|Sure|So|Well|Great|Good)\b)"
-                r"[A-Z][a-z]+(?: [A-Z][a-z]+)?\.?\W*$"), "operator", "analyst"),
+    (
+        re.compile(
+            r"^\W*(?:(?:thank you|thanks|okay)[.,]?\s+)?"
+            r"(?!(?:Okay|Yes|No|Thanks|Thank|Right|Sure|So|Well|Great|Good)\b)"
+            r"[A-Z][a-z]+(?: [A-Z][a-z]+)?\.?\W*$"
+        ),
+        "operator",
+        "analyst",
+    ),
 ]
 
 # Only the instruction that starts Q&A, not the operator's early "there will be a Q&A
 # session after the presentation", hence the now/begin/open anchor.
 _QA = re.compile(
     r"\b(now|begin|open|start)\b[^.?!]{0,40}\b(question[- ]and[- ]answer|questions|q ?(&|and) ?a)\b"
-    r"|\blook forward to (your|taking your) questions", _I)
+    r"|\blook forward to (your|taking your) questions",
+    _I,
+)
 
 
 def seed_roles(texts: list[str]) -> tuple[list[list[str]], list[list[str]]]:
@@ -82,5 +113,6 @@ def qa_start(texts: list[str]) -> int | None:
 
 def sections(texts: list[str]) -> list[str]:
     start = qa_start(texts)
-    return ["qa" if start is not None and i >= start else "prepared_remarks"
-            for i in range(len(texts))]
+    return [
+        "qa" if start is not None and i >= start else "prepared_remarks" for i in range(len(texts))
+    ]

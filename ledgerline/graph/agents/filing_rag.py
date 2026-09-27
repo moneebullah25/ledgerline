@@ -68,16 +68,23 @@ def windows(text: str) -> list[str]:
     spans = [(a, b) for a, b in pairwise(cuts) if text[a:b].strip()]
     if len(spans) < 2:
         return [text.strip()] if text.strip() else []
-    return [text[spans[i][0]:spans[i + 1][1]].strip() for i in range(len(spans) - 1)]
+    return [text[spans[i][0] : spans[i + 1][1]].strip() for i in range(len(spans) - 1)]
 
 
 def _search(s: Session, query: str, company_id: int, lock: Lock) -> list[Hit]:
     """Hybrid search over the company's 10-K/10-Q chunks; `lock` covers only DB reads, so
     the other agents are not serialised behind embedding and rerank inference."""
     with lock:
-        fids = list(s.scalars(select(Filing.id).where(
-            Filing.company_id == company_id, Filing.form_type.in_(PERIODIC))))
-    return search(s, query, company_id=company_id, k=K, filing_ids=fids, db_lock=lock) if fids else []
+        fids = list(
+            s.scalars(
+                select(Filing.id).where(
+                    Filing.company_id == company_id, Filing.form_type.in_(PERIODIC)
+                )
+            )
+        )
+    return (
+        search(s, query, company_id=company_id, k=K, filing_ids=fids, db_lock=lock) if fids else []
+    )
 
 
 def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, llm.Usage]:
@@ -86,9 +93,10 @@ def run(s: Session, claim: Claim, ctx: Ctx, lock: Lock) -> tuple[EvidenceItem, l
         return _insufficient("no 10-K/10-Q passages retrieved for this company"), llm.OFFLINE
     if llm.available():
         with lock:
-            periods = {f.id: (f.form_type, f.fiscal_year, f.fiscal_period)
-                       for f in s.scalars(select(Filing).where(
-                           Filing.id.in_({h.filing_id for h in hits})))}
+            periods = {
+                f.id: (f.form_type, f.fiscal_year, f.fiscal_period)
+                for f in s.scalars(select(Filing).where(Filing.id.in_({h.filing_id for h in hits})))
+            }
         return judge_llm(claim, hits, claim_context(s, claim, lock), periods)
     return assess(claim, hits, nli), llm.OFFLINE
 
@@ -107,7 +115,7 @@ def claim_context(s: Session, claim: Claim, lock: Lock) -> dict[str, str]:
         path = s.get(Filing, claim.filing_id).storage_path
         fye = s.get(Company, claim.company_id).fiscal_year_end
     text = _release_text(path)
-    if text[claim.span_start:claim.span_end] != claim.text:
+    if text[claim.span_start : claim.span_end] != claim.text:
         return {}
     ctx = context(text, claim, claim.fiscal_year, claim.fiscal_period, fye)
     return {f"claim_{k}": v for k, v in ctx.items() if k != "claim" and v}
@@ -135,16 +143,23 @@ def assess(claim: Claim, hits: list[Hit], score=nli) -> EvidenceItem:
     ie = int(probs[:, _ENTAIL].argmax())
     pe, pc = float(probs[ie, _ENTAIL]), float(probs[:, _CONTRA].max())
     if pe < ENTAIL_MIN or pe < probs[ie, _CONTRA]:
-        return _insufficient("no passage entails the claim",
-                             p_entail=pe, p_contra=pc, windows_scored=len(cands))
+        return _insufficient(
+            "no passage entails the claim", p_entail=pe, p_contra=pc, windows_scored=len(cands)
+        )
     h, w = cands[ie]
     margin = float(pe - np.delete(probs[ie], _ENTAIL).max())
     return EvidenceItem(
-        agent="filing_rag", stance="supports",
+        agent="filing_rag",
+        stance="supports",
         summary=f"NLI: a passage in {h.section_path} entails the claim.",
         citations=[Citation(kind="chunk", ref_id=h.chunk_id, quote=w)],
-        payload={"p_entail": pe, "p_contra": pc, "margin": margin,
-                 "section": h.section_path, "windows_scored": len(cands)},
+        payload={
+            "p_entail": pe,
+            "p_contra": pc,
+            "margin": margin,
+            "section": h.section_path,
+            "windows_scored": len(cands),
+        },
     )
 
 
@@ -158,13 +173,18 @@ class _Judgment(BaseModel):
     passage_is_company_total: bool = True
 
 
-_SCOPED = ("Extraction judged this figure not a company total (a segment, product, region or "
-           "other part of the company); only a passage about that same part can contradict it.")
+_SCOPED = (
+    "Extraction judged this figure not a company total (a segment, product, region or "
+    "other part of the company); only a passage about that same part can contradict it."
+)
 
 
-def judge_llm(claim: Claim, hits: list[Hit], scope: dict[str, str] | None = None,
-              periods: dict[int, tuple[str, int | None, str | None]] | None = None,
-              ) -> tuple[EvidenceItem, llm.Usage]:
+def judge_llm(
+    claim: Claim,
+    hits: list[Hit],
+    scope: dict[str, str] | None = None,
+    periods: dict[int, tuple[str, int | None, str | None]] | None = None,
+) -> tuple[EvidenceItem, llm.Usage]:
     """periods: filing_id -> (form_type, fiscal_year, fiscal_period).
 
     Contradiction rules enforced here, not left to the prompt: the quoted passage's filing
@@ -182,27 +202,39 @@ def judge_llm(claim: Claim, hits: list[Hit], scope: dict[str, str] | None = None
             return "filing period unknown"
         return f"{p[0]} fiscal {p[1]} {p[2]}"
 
-    data = ({"claim": claim.text, "claim_period": f"fiscal {fy} {fp}"} | (scope or {})
-            | ({"claim_scope": _SCOPED} if scoped else {})
-            | {f"passage {i} ({label(h)})": h.text for i, h in enumerate(hits)})
-    j, usage = llm.structured("standard", system, data, "Judge the claim against the passages.",
-                              _Judgment)
+    data = (
+        {"claim": claim.text, "claim_period": f"fiscal {fy} {fp}"}
+        | (scope or {})
+        | ({"claim_scope": _SCOPED} if scoped else {})
+        | {f"passage {i} ({label(h)})": h.text for i, h in enumerate(hits)}
+    )
+    j, usage = llm.structured(
+        "standard", system, data, "Judge the claim against the passages.", _Judgment
+    )
     ok = 0 <= j.passage < len(hits) and j.quote and j.quote in hits[j.passage].text
     cites = [Citation(kind="chunk", ref_id=hits[j.passage].chunk_id, quote=j.quote)] if ok else []
     if audit(j.summary, cites, claim.text):  # FR-45 / §16: keep the stance, drop the wording
         j.summary = f"Judgment on the retrieved passages: {j.stance}."
-    if j.stance == "insufficient" or not ok or (
-            claim.value is not None and not mentions_value(j.quote, claim)):
+    if (
+        j.stance == "insufficient"
+        or not ok
+        or (claim.value is not None and not mentions_value(j.quote, claim))
+    ):
         return _insufficient(j.summary, prompt_version=version), usage
     if j.stance == "contradicts":
         passage_period = periods.get(hits[j.passage].filing_id, (None, None, None))[1:]
         if passage_period != (fy, fp):
-            return _insufficient("the contradicting passage is from another filing period",
-                                 prompt_version=version), usage
+            return _insufficient(
+                "the contradicting passage is from another filing period", prompt_version=version
+            ), usage
         if scoped and j.passage_is_company_total:
-            return _insufficient("a company-total passage cannot contradict a scoped claim",
-                                 prompt_version=version), usage
+            return _insufficient(
+                "a company-total passage cannot contradict a scoped claim", prompt_version=version
+            ), usage
     return EvidenceItem(
-        agent="filing_rag", stance=j.stance, summary=j.summary, citations=cites,
+        agent="filing_rag",
+        stance=j.stance,
+        summary=j.summary,
+        citations=cites,
         payload={"prompt_version": version, "section": hits[j.passage].section_path},
     ), usage

@@ -10,12 +10,20 @@ from ledgerline.store.xbrl_query import Fact
 
 
 def C(**kw) -> Claim:
-    base = {"company_id": 1, "fiscal_year": 2025, "fiscal_period": "Q1", "span_start": 0,
-            "span_end": 1, "claim_type": "reported_result", "filing_id": 1}
+    base = {
+        "company_id": 1,
+        "fiscal_year": 2025,
+        "fiscal_period": "Q1",
+        "span_start": 0,
+        "span_end": 1,
+        "claim_type": "reported_result",
+        "filing_id": 1,
+    }
     return Claim(**(base | kw))
 
 
 # ---- market reaction
+
 
 def test_abnormal_return_window():
     d0 = date(2025, 1, 30)  # Thursday
@@ -33,14 +41,22 @@ def test_abnormal_return_window():
 
 # ---- filing RAG
 
-HIT = Hit(1, 9, "Part I > Item 2. MD&A", "Total net sales were $94,930 million. "
-          "Services grew strongly. iPhone sales declined.", 1.0, 0, 90)
+HIT = Hit(
+    1,
+    9,
+    "Part I > Item 2. MD&A",
+    "Total net sales were $94,930 million. Services grew strongly. iPhone sales declined.",
+    1.0,
+    0,
+    90,
+)
 
 
 def fake_scores(entail_on: str):
     """contradiction/entailment/neutral probs: entail windows containing `entail_on`."""
-    return lambda pairs: np.array([[0.05, 0.9, 0.05] if entail_on in w else [0.1, 0.1, 0.8]
-                                   for w, _ in pairs])
+    return lambda pairs: np.array(
+        [[0.05, 0.9, 0.05] if entail_on in w else [0.1, 0.1, 0.8] for w, _ in pairs]
+    )
 
 
 def test_windows_are_exact_substrings():
@@ -74,6 +90,7 @@ def test_qualitative_claim_supported_by_nli():
 
 # ---- forecast
 
+
 def test_mase_is_relative_to_seasonal_naive():
     actual = np.array([10.0, 12, 14, 16])
     naive = np.array([8.0, 10, 12, 14])  # MAE 2
@@ -86,14 +103,27 @@ def _fact(fy, fp, v):
 
 
 def test_contiguous_tail_drops_history_before_a_gap():
-    fs = [_fact(2023, "Q3", 1), _fact(2024, "Q1", 2), _fact(2024, "Q2", 3), _fact(2024, "Q3", 4),
-          _fact(2024, "Q4", 5), _fact(2025, "Q1", 6)]
+    fs = [
+        _fact(2023, "Q3", 1),
+        _fact(2024, "Q1", 2),
+        _fact(2024, "Q2", 3),
+        _fact(2024, "Q3", 4),
+        _fact(2024, "Q4", 5),
+        _fact(2025, "Q1", 6),
+    ]
     assert [f.value for f in forecast.contiguous_tail(fs)] == [2, 3, 4, 5, 6]
 
 
 def test_short_history_is_insufficient():
-    claim = C(text="revenue of $10", claim_type="guidance", metric="revenue", value=10.0,
-              unit="USD", target_fiscal_year=2025, target_fiscal_period="Q2")
+    claim = C(
+        text="revenue of $10",
+        claim_type="guidance",
+        metric="revenue",
+        value=10.0,
+        unit="USD",
+        target_fiscal_year=2025,
+        target_fiscal_period="Q2",
+    )
     ev = forecast.assess(claim, [_fact(2025, "Q1", 9.0)])
     assert ev.stance == "insufficient" and "too short" in ev.summary
 
@@ -106,9 +136,17 @@ def test_forecast_on_seasonal_series():
     hist = [_fact(fy, fp, v) for (fy, fp), v in zip(quarters, y)]  # ends 2024 Q4
     fy, fp = 2024, "Q4"
     guided = 100 + 2 * 40  # the trend's next value, 2025 Q1
-    claim = C(text=f"revenue of ${guided}", claim_type="guidance", metric="revenue",
-              value=float(guided), unit="USD", fiscal_year=fy, fiscal_period=fp,
-              target_fiscal_year=2025, target_fiscal_period="Q1")
+    claim = C(
+        text=f"revenue of ${guided}",
+        claim_type="guidance",
+        metric="revenue",
+        value=float(guided),
+        unit="USD",
+        fiscal_year=fy,
+        fiscal_period=fp,
+        target_fiscal_year=2025,
+        target_fiscal_period="Q1",
+    )
     ev = forecast.assess(claim, hist)
     assert ev.payload["mase"]["ensemble"] < 1.0
     assert ev.stance == "supports"
@@ -118,12 +156,25 @@ def test_forecast_on_seasonal_series():
 
 # ---- filing RAG, online judgment with a stubbed llm.structured
 
+
 def _judge(monkeypatch, **j):
     from ledgerline import llm
-    out = filing_rag._Judgment(**({"stance": "supports", "passage": 0,
-                                   "quote": "Services grew strongly.", "summary": "supports"} | j))
+
+    out = filing_rag._Judgment(
+        **(
+            {
+                "stance": "supports",
+                "passage": 0,
+                "quote": "Services grew strongly.",
+                "summary": "supports",
+            }
+            | j
+        )
+    )
     monkeypatch.setattr(llm, "structured", lambda *a, **k: (out, llm.OFFLINE))
-    return filing_rag.judge_llm(C(text="Services grew strongly", claim_type="qualitative"), [HIT])[0]
+    return filing_rag.judge_llm(C(text="Services grew strongly", claim_type="qualitative"), [HIT])[
+        0
+    ]
 
 
 def test_judge_llm_accepts_verbatim_quote(monkeypatch):
@@ -142,19 +193,36 @@ def test_judge_llm_summary_is_audited(monkeypatch):
     assert ev.stance == "supports" and ev.summary == "Judgment on the retrieved passages: supports."
 
 
-NUM_HIT = Hit(1, 9, "MD&A", "Total net sales were $94,930 million. Services revenue was $26.6 billion.",
-              1.0, 0, 70)
+NUM_HIT = Hit(
+    1,
+    9,
+    "MD&A",
+    "Total net sales were $94,930 million. Services revenue was $26.6 billion.",
+    1.0,
+    0,
+    70,
+)
 Q1 = {9: ("10-Q", 2025, "Q1")}
 
 
 def _judge_num(monkeypatch, claim=None, periods=Q1, **j):
     from ledgerline import llm
-    out = filing_rag._Judgment(**({"stance": "contradicts", "passage": 0,
-                                   "quote": "Total net sales were $94,930 million.",
-                                   "summary": "contradicts"} | j))
+
+    out = filing_rag._Judgment(
+        **(
+            {
+                "stance": "contradicts",
+                "passage": 0,
+                "quote": "Total net sales were $94,930 million.",
+                "summary": "contradicts",
+            }
+            | j
+        )
+    )
     monkeypatch.setattr(llm, "structured", lambda *a, **k: (out, llm.OFFLINE))
-    claim = claim or C(text="net sales of $94.9 billion", value=94.9e9, unit="USD",
-                       metric="revenue")
+    claim = claim or C(
+        text="net sales of $94.9 billion", value=94.9e9, unit="USD", metric="revenue"
+    )
     return filing_rag.judge_llm(claim, [NUM_HIT], None, periods)[0]
 
 
@@ -164,11 +232,14 @@ def test_judge_llm_numeric_contradiction_needs_its_period(monkeypatch):
     assert _judge_num(monkeypatch, periods={}).stance == "insufficient"  # period unknown
 
 
-@pytest.mark.parametrize("j", [
-    {"quote": "Services revenue was $26.6 billion."},  # a different number
-    {"passage": -1},
-    {"quote": ""},
-])
+@pytest.mark.parametrize(
+    "j",
+    [
+        {"quote": "Services revenue was $26.6 billion."},  # a different number
+        {"passage": -1},
+        {"quote": ""},
+    ],
+)
 def test_judge_llm_negatives_are_insufficient(monkeypatch, j):
     assert _judge_num(monkeypatch, **j).stance == "insufficient"
 
@@ -197,18 +268,43 @@ def test_online_run_sends_release_context_and_periods(db, monkeypatch):
     db.flush()
 
     def filing(acc, form, path):
-        f = Filing(company_id=co.id, accession_no=acc, form_type=form, filed_at=date(2026, 8, 26),
-                   fiscal_year=2027, fiscal_period="Q2", doc_url="u", storage_path=path,
-                   source_url="u", fetched_at=datetime.now(UTC), sha256="0" * 64, license_note="t")
+        f = Filing(
+            company_id=co.id,
+            accession_no=acc,
+            form_type=form,
+            filed_at=date(2026, 8, 26),
+            fiscal_year=2027,
+            fiscal_period="Q2",
+            doc_url="u",
+            storage_path=path,
+            source_url="u",
+            fetched_at=datetime.now(UTC),
+            sha256="0" * 64,
+            license_note="t",
+        )
         db.add(f)
         db.flush()
         return f
-    release, q = filing("r1", "8-K", "objects/test-l6-release.htm"), filing("q1", "10-Q", "objects/q")
+
+    release, q = (
+        filing("r1", "8-K", "objects/test-l6-release.htm"),
+        filing("q1", "10-Q", "objects/q"),
+    )
     phrase = "Data Center revenue of $89.0 billion"
     start = text.index(phrase)
-    claim = Claim(company_id=co.id, fiscal_year=2027, fiscal_period="Q2", filing_id=release.id,
-                  span_start=start, span_end=start + len(phrase), text=phrase,
-                  claim_type="reported_result", value=89e9, unit="USD", extractor_version="t")
+    claim = Claim(
+        company_id=co.id,
+        fiscal_year=2027,
+        fiscal_period="Q2",
+        filing_id=release.id,
+        span_start=start,
+        span_end=start + len(phrase),
+        text=phrase,
+        claim_type="reported_result",
+        value=89e9,
+        unit="USD",
+        extractor_version="t",
+    )
     hit = Hit(1, q.id, "MD&A", "Data Center revenue was $89.0 billion.", 1.0, 0, 30)
     monkeypatch.setattr(filing_rag, "_search", lambda *a: [hit])
     monkeypatch.setattr(llm, "available", lambda: True)
@@ -216,8 +312,13 @@ def test_online_run_sends_release_context_and_periods(db, monkeypatch):
 
     def structured(tier, system, data, instruction, schema):
         seen.append(data)
-        return schema(stance="supports", passage=0, quote="Data Center revenue was $89.0 billion.",
-                      summary="supports"), llm.OFFLINE
+        return schema(
+            stance="supports",
+            passage=0,
+            quote="Data Center revenue was $89.0 billion.",
+            summary="supports",
+        ), llm.OFFLINE
+
     monkeypatch.setattr(llm, "structured", structured)
     ctx = Ctx(co.id, co.cik, co.ticker, None, None, Lock())
     ev, _ = filing_rag.run(db, claim, ctx, ctx.db_lock)

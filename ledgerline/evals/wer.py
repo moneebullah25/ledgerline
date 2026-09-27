@@ -52,8 +52,9 @@ def align(ref: list[str], hyp: list[str]) -> tuple[int, dict[int, int]]:
     matched tokens). The cut is the end of the last match of >= ANCHOR words: a stray short
     match of the excerpt's final words far ahead in the reference would otherwise count
     the whole gap as deletions. Trailing deletions at the excerpt boundary are not counted."""
-    blocks = [b for b in SequenceMatcher(None, ref, hyp, autojunk=False).get_matching_blocks()
-              if b.size]
+    blocks = [
+        b for b in SequenceMatcher(None, ref, hyp, autojunk=False).get_matching_blocks() if b.size
+    ]
     anchors = [b for b in blocks if b.size >= ANCHOR] or blocks
     cut = max((b.a + b.size for b in anchors), default=0)
     pairs = {b.b + k: b.a + k for b in blocks if b.a < cut for k in range(b.size)}
@@ -71,9 +72,11 @@ def label_accuracy(hyp_turns, hyp_owner, ref_turns, ref_owner, pairs, key) -> di
         gold.setdefault(hyp_owner[h], Counter())[label] += 1
         word_ok += hyp_turns[hyp_owner[h]][key] == label
     turn_ok = [hyp_turns[i][key] == c.most_common(1)[0][0] for i, c in gold.items()]
-    return {"turns": len(turn_ok),
-            "turn_acc": round(sum(turn_ok) / len(turn_ok), 4) if turn_ok else None,
-            "word_acc": round(word_ok / len(pairs), 4) if pairs else None}
+    return {
+        "turns": len(turn_ok),
+        "turn_acc": round(sum(turn_ok) / len(turn_ok), 4) if turn_ok else None,
+        "word_acc": round(word_ok / len(pairs), 4) if pairs else None,
+    }
 
 
 def vad_recall_proxy(audio_path: str, model: str, minutes: float) -> float:
@@ -81,8 +84,11 @@ def vad_recall_proxy(audio_path: str, model: str, minutes: float) -> float:
     span. A proxy: the reference has no timestamps, so no-VAD ASR stands in for ground truth."""
     audio = pipeline.load_audio(audio_path, minutes * 60)
     spans = pipeline.speech_spans(audio)
-    mids = [(w["s"] + w["e"]) / 2 for seg in pipeline.transcribe(audio, model, vad=False)
-            for w in seg["words"]]
+    mids = [
+        (w["s"] + w["e"]) / 2
+        for seg in pipeline.transcribe(audio, model, vad=False)
+        for w in seg["words"]
+    ]
     if not mids:
         raise ValueError("no words transcribed without VAD; cannot estimate recall")
     return sum(any(s <= m <= e for s, e in spans) for m in mids) / len(mids)
@@ -91,7 +97,9 @@ def vad_recall_proxy(audio_path: str, model: str, minutes: float) -> float:
 def main(argv: list[str] | None = None) -> dict:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.wer")
     p.add_argument("--date", default="20240918")
-    p.add_argument("--model", default=None, help="faster-whisper model; default settings().asr_model")
+    p.add_argument(
+        "--model", default=None, help="faster-whisper model; default settings().asr_model"
+    )
     p.add_argument("--minutes", type=float, default=15.0)
     p.add_argument("--vad-recall-minutes", type=float, default=3.0, help="0 skips the proxy")
     a = p.parse_args(argv)
@@ -118,27 +126,39 @@ def main(argv: list[str] | None = None) -> dict:
         "asr_rtf": round(res.timings["asr_s"] / res.duration_s, 4),
         "vad_reduction": round(1 - res.speech_s / res.duration_s, 4),
         "role_acc": label_accuracy(res.turns, hyp_owner, ref_turns, ref_owner, pairs, "role"),
-        "section_acc": label_accuracy(res.turns, hyp_owner, ref_turns, ref_owner, pairs,
-                                      "section"),
+        "section_acc": label_accuracy(res.turns, hyp_owner, ref_turns, ref_owner, pairs, "section"),
     }
     if a.vad_recall_minutes:
         metrics["vad_speech_recall_proxy"] = round(
-            vad_recall_proxy(audio_path, model, a.vad_recall_minutes), 4)
+            vad_recall_proxy(audio_path, model, a.vad_recall_minutes), 4
+        )
     details = {
-        "model": model, "compute_type": "int8", "device": "cpu",
-        "audio_source": source, "call_audio_id": call_id, "synthetic": False,
-        "evaluated_s": round(res.duration_s, 1), "full_duration_s": full_s,
-        "speech_s": round(res.speech_s, 1), "ref_words_aligned": cut, "hyp_words": len(hyp),
-        "segments": len(res.turns), "speakers": len({t["speaker_label"] for t in res.turns}),
-        "speaker_threshold": pipeline.SPEAKER_THRESHOLD, "timings_s": res.timings,
+        "model": model,
+        "compute_type": "int8",
+        "device": "cpu",
+        "audio_source": source,
+        "call_audio_id": call_id,
+        "synthetic": False,
+        "evaluated_s": round(res.duration_s, 1),
+        "full_duration_s": full_s,
+        "speech_s": round(res.speech_s, 1),
+        "ref_words_aligned": cut,
+        "hyp_words": len(hyp),
+        "segments": len(res.turns),
+        "speakers": len({t["speaker_label"] for t in res.turns}),
+        "speaker_threshold": pipeline.SPEAKER_THRESHOLD,
+        "timings_s": res.timings,
         "vad_recall_minutes": a.vad_recall_minutes,
         "reference": "Board transcript PDF (lightly edited); tokens after the last aligned "
-                     "match are excluded",
+        "match are excluded",
     }
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                         check=False).stdout.strip()
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip()
     with session() as s:
-        s.add(EvalRun(git_sha=sha or None, layer="L1", name="wer", metrics=metrics, details=details))
+        s.add(
+            EvalRun(git_sha=sha or None, layer="L1", name="wer", metrics=metrics, details=details)
+        )
     print(json.dumps({"metrics": metrics, "details": details}, indent=1))
     return metrics
 

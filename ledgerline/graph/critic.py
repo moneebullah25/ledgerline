@@ -27,16 +27,19 @@ _FLIP = {"supports": "contradicts", "contradicts": "supports"}
 ARGUMENTS = {
     "xbrl_table:rounding_edge": (
         "The gap between the claim and the filed fact is close to the tolerance boundary; "
-        "a slightly different rounding convention would flip the comparison."),
+        "a slightly different rounding convention would flip the comparison."
+    ),
     "xbrl_table:derived_fact": (
         "The filed figure is derived from component facts rather than reported directly, "
-        "so a definitional difference is possible."),
+        "so a definitional difference is possible."
+    ),
     "xbrl_table:assumed_period": (
         "The claim does not name its period; the comparison assumes it refers to the "
-        "quarter of the release."),
+        "quarter of the release."
+    ),
     "filing_rag:low_nli_margin": (
-        "The entailment model barely preferred this reading of the passage over the "
-        "alternatives."),
+        "The entailment model barely preferred this reading of the passage over the alternatives."
+    ),
     "forecast:weak_skill": "The forecast only narrowly beats seasonal naive on held-out quarters.",
     "forecast:interval_edge": "The guided value sits near the edge of the forecast interval.",
 }
@@ -66,8 +69,9 @@ def _weakest(claim: Claim, evidence: list[EvidenceItem], stance: str) -> tuple[s
     return (code, ARGUMENTS[code]) if code else None
 
 
-def critique(claim: Claim, evidence: list[EvidenceItem],
-             offline: bool = False) -> tuple[CriticOutput, llm.Usage]:
+def critique(
+    claim: Claim, evidence: list[EvidenceItem], offline: bool = False
+) -> tuple[CriticOutput, llm.Usage]:
     """The model argues only where the judge model will read it (needs_judgment); an
     unopposed filed-fact verdict is written by the rule, which quotes the offline critic."""
     stance, _ = decide(claim, evidence)
@@ -80,16 +84,22 @@ def critique_offline(claim: Claim, evidence: list[EvidenceItem]) -> CriticOutput
     stance, _ = decide(claim, evidence)
     weak = _weakest(claim, evidence, stance)
     if weak is None:
-        return CriticOutput(counter_stance=_FLIP[stance], weakest_evidence=None,
-                            argument="No weak point found in the leading evidence.")
+        return CriticOutput(
+            counter_stance=_FLIP[stance],
+            weakest_evidence=None,
+            argument="No weak point found in the leading evidence.",
+        )
     code, argument = weak
     return CriticOutput(counter_stance=_FLIP[stance], argument=argument, weakest_evidence=code)
 
 
 def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:
     system, _ = load_prompt("critic")
-    data = {"claim": claim.text, "leading_stance": stance,
-            "evidence": json.dumps([e.model_dump() for e in evidence])}
+    data = {
+        "claim": claim.text,
+        "leading_stance": stance,
+        "evidence": json.dumps([e.model_dump() for e in evidence]),
+    }
     cites = [c for e in evidence for c in e.citations]
     total = llm.Usage()
     instruction = "Argue the other side."
@@ -101,8 +111,10 @@ def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:
             return out, total
         # Details quote model output, so they go in a data block, not the instruction (A6).
         data = data | {"rejected_answer_problems": json.dumps(problems)}
-        instruction = ("Argue the other side. Your previous argument was rejected; the "
-                       "rejected_answer_problems document lists why.")
+        instruction = (
+            "Argue the other side. Your previous argument was rejected; the "
+            "rejected_answer_problems document lists why."
+        )
     # The critic is advisory: an argument that keeps failing the audit is replaced by the
     # deterministic offline critic instead of costing the claim its verdict. Spend is kept.
     return critique_offline(claim, evidence), total

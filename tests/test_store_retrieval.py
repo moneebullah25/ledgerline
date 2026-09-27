@@ -37,21 +37,35 @@ def _bow(text: str) -> np.ndarray:
 
 @pytest.mark.db
 def test_index_and_search(db, monkeypatch):
-    doc = ("PART I\nItem 2. Management's Discussion and Analysis\n"
-           "Total net sales were 94,930 million, driven by iPhone.\n"
-           "PART II\nItem 1A. Risk Factors\nSupply chain disruption could hurt margins.\n")
-    monkeypatch.setitem(sys.modules, "ledgerline.ingest.documents",
-                        types.SimpleNamespace(load_text=lambda f: doc))
+    doc = (
+        "PART I\nItem 2. Management's Discussion and Analysis\n"
+        "Total net sales were 94,930 million, driven by iPhone.\n"
+        "PART II\nItem 1A. Risk Factors\nSupply chain disruption could hurt margins.\n"
+    )
+    monkeypatch.setitem(
+        sys.modules, "ledgerline.ingest.documents", types.SimpleNamespace(load_text=lambda f: doc)
+    )
     monkeypatch.setattr(embed, "embed_passages", lambda ts: [_bow(t) for t in ts])
     monkeypatch.setattr(embed, "embed_query", _bow)
 
     co = Company(cik="0000000001", ticker="TST", name="Test Co")
     db.add(co)
     db.flush()
-    prov = {"source_url": "x", "fetched_at": datetime.now(UTC), "sha256": "0" * 64,
-            "license_note": "t"}
-    f = Filing(company_id=co.id, accession_no="0000000001-26-000001", form_type="10-Q",
-               filed_at=date(2026, 7, 31), doc_url="x", storage_path="x", **prov)
+    prov = {
+        "source_url": "x",
+        "fetched_at": datetime.now(UTC),
+        "sha256": "0" * 64,
+        "license_note": "t",
+    }
+    f = Filing(
+        company_id=co.id,
+        accession_no="0000000001-26-000001",
+        form_type="10-Q",
+        filed_at=date(2026, 7, 31),
+        doc_url="x",
+        storage_path="x",
+        **prov,
+    )
     db.add(f)
     db.flush()
 
@@ -61,7 +75,7 @@ def test_index_and_search(db, monkeypatch):
 
     hits = search(db, "What were net sales of 94,930?", company_id=co.id, rerank=False)
     assert hits[0].section_path.endswith("Item 2. Management's Discussion and Analysis")
-    assert doc[hits[0].char_start:hits[0].char_end] == hits[0].text
+    assert doc[hits[0].char_start : hits[0].char_end] == hits[0].text
     risk = search(db, "supply chain risks", company_id=co.id, k=1, rerank=False)
     assert risk[0].section_path == "Part II > Item 1A. Risk Factors"
     assert search(db, "net sales", company_id=co.id + 1, rerank=False) == []

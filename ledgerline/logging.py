@@ -6,12 +6,32 @@ import sys
 from datetime import UTC, datetime
 
 # Standard LogRecord instance attributes that are NOT extra fields.
-_STANDARD_ATTRS = frozenset({
-    "args", "created", "exc_info", "exc_text", "filename", "funcName",
-    "levelname", "levelno", "lineno", "message", "module", "msecs", "msg",
-    "name", "pathname", "process", "processName", "relativeCreated",
-    "stack_info", "taskName", "thread", "threadName",
-})
+_STANDARD_ATTRS = frozenset(
+    {
+        "args",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
 
 
 class _JsonFormatter(logging.Formatter):

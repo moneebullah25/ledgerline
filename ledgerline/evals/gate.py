@@ -32,16 +32,22 @@ def compare(current: dict, baseline: dict) -> tuple[bool, str]:
     drop = base - cur
     ok = drop <= MAX_DROP + 1e-9
     verb = "within" if ok else "exceeds"
-    return ok, (f"{METRIC}: baseline {base:.3f}, this PR {cur:.3f} "
-                f"(change {-drop * 100:+.1f} pts; {verb} the {MAX_DROP * 100:.0f}-pt limit).")
+    return ok, (
+        f"{METRIC}: baseline {base:.3f}, this PR {cur:.3f} "
+        f"(change {-drop * 100:+.1f} pts; {verb} the {MAX_DROP * 100:.0f}-pt limit)."
+    )
 
 
 def verdict_diff(current: dict, baseline: dict) -> list[tuple[str, str | None, str | None, str]]:
     """(golden id, baseline prediction, current prediction, gold) for every changed claim."""
     base, cur = baseline.get("per_claim", {}), current.get("per_claim", {})
     return [
-        (k, base.get(k, {}).get("predicted"), cur.get(k, {}).get("predicted"),
-         (cur.get(k) or base.get(k))["gold"])
+        (
+            k,
+            base.get(k, {}).get("predicted"),
+            cur.get(k, {}).get("predicted"),
+            (cur.get(k) or base.get(k))["gold"],
+        )
         for k in sorted(base.keys() | cur.keys())
         if base.get(k, {}).get("predicted") != cur.get(k, {}).get("predicted")
     ]
@@ -60,8 +66,11 @@ def render(ok: bool, summary: str, diff: list) -> str:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m ledgerline.evals.gate")
     p.add_argument("--baseline", type=Path, default=BASELINE)
-    p.add_argument("--write-baseline", action="store_true",
-                   help="record this run as the new baseline (do this on main, not in a PR)")
+    p.add_argument(
+        "--write-baseline",
+        action="store_true",
+        help="record this run as the new baseline (do this on main, not in a PR)",
+    )
     p.add_argument("--out", type=Path, default=Path("eval-gate.md"))
     a = p.parse_args(argv)
 

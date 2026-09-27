@@ -18,12 +18,15 @@ _TOKEN = re.compile(r"\w+|[^\w\s]")
 
 # The optional tail allows "PART I — FINANCIAL INFORMATION", "PART I FINANCIAL INFORMATION"
 # (capitalised title, case-sensitive) and TOC rows "Part I | 3"; not "Part I of this report".
-_PART = re.compile(r"^[ \t]*PART[ \t]+(IV|III|II|I)\b(?:[ \t]*[—–:.|\-][^\n]{0,100}"
-                   r"|[ \t]+(?-i:[A-Z])[^\n]{0,100})?[ \t]*$",
-                   re.IGNORECASE | re.MULTILINE)
+_PART = re.compile(
+    r"^[ \t]*PART[ \t]+(IV|III|II|I)\b(?:[ \t]*[—–:.|\-][^\n]{0,100}"
+    r"|[ \t]+(?-i:[A-Z])[^\n]{0,100})?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 # "Item 2. Title", "ITEM 1A — Title", or a bare "Item 2." with the title on the next line.
-_ITEM = re.compile(r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?([^\n]*)$",
-                   re.IGNORECASE | re.MULTILINE)
+_ITEM = re.compile(
+    r"^[ \t]*ITEM[ \t]+(\d{1,2}[A-C]?)\b[ \t]*[.:—–\-]?([^\n]*)$", re.IGNORECASE | re.MULTILINE
+)
 _MAX_HEADER_LINE = 200
 
 # Documents without Item structure (8-K press releases, some 10-Qs): a heading is a short,
@@ -50,7 +53,7 @@ def count_tokens(text: str) -> int:
 
 def _next_line(text: str, pos: int) -> str:
     """First non-blank line starting at pos (the title of a bare "Item 2." header)."""
-    for line in text[pos:pos + 400].split("\n"):
+    for line in text[pos : pos + 400].split("\n"):
         if line.strip():
             return line.strip()
     return ""
@@ -154,8 +157,13 @@ def _heading_sections(text: str) -> list[tuple[int, str]]:
     lines = [(o, s) for o, s in lines if s]
     for (off, line), (_, nxt) in zip(lines, lines[1:] + [(0, "")]):
         # " | " marks a table row (load_text joins cells with it), not a heading.
-        short = (2 <= len(line.split()) and len(line) <= 100 and line[0].isupper()
-                 and "|" not in line and line.lower() != "table of contents")
+        short = (
+            2 <= len(line.split())
+            and len(line) <= 100
+            and line[0].isupper()
+            and "|" not in line
+            and line.lower() != "table of contents"
+        )
         if short and (_STATEMENT_TITLE.match(line) or (line[-1] not in ".,;:" and len(nxt) >= 200)):
             out.append((off, line))
     return out
@@ -190,7 +198,7 @@ def _split(text: str, s: int, e: int, max_tokens: int) -> list[tuple[int, int]]:
             continue
         toks = list(_TOKEN.finditer(text, ps, pe))
         for i in range(0, len(toks), max_tokens):
-            window = toks[i:i + max_tokens]
+            window = toks[i : i + max_tokens]
             out.append((window[0].start(), window[-1].end()))
     return out
 
@@ -221,9 +229,9 @@ def chunk_document(
                 total += units[j][2]
                 j += 1
             cs, ce = units[i][0], units[j - 1][1]
-            chunks.append(ChunkDraft(
-                len(chunks), path, cs, ce, text[cs:ce], count_tokens(text[cs:ce])
-            ))
+            chunks.append(
+                ChunkDraft(len(chunks), path, cs, ce, text[cs:ce], count_tokens(text[cs:ce]))
+            )
             if j == len(units):
                 break
             # Step back over trailing units worth <= overlap tokens, always moving forward.

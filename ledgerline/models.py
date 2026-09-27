@@ -107,8 +107,14 @@ class XbrlFact(Provenance, Base):
     derived: Mapped[bool] = mapped_column(default=False)
     __table_args__ = (
         UniqueConstraint(
-            "company_id", "tag", "unit", "period_start", "period_end", "accession_no",
-            name="uq_xbrl_fact", postgresql_nulls_not_distinct=True,
+            "company_id",
+            "tag",
+            "unit",
+            "period_start",
+            "period_end",
+            "accession_no",
+            name="uq_xbrl_fact",
+            postgresql_nulls_not_distinct=True,
         ),
         Index("ix_xbrl_lookup", "company_id", "tag", "unit", "fiscal_year", "fiscal_period"),
         CheckConstraint(_in("fiscal_period", FISCAL_PERIODS), name="fp"),
@@ -132,7 +138,9 @@ class Chunk(Base):
     __table_args__ = (
         UniqueConstraint("filing_id", "chunk_index", name="uq_chunk"),
         Index(
-            "ix_chunk_embedding", "embedding", postgresql_using="hnsw",
+            "ix_chunk_embedding",
+            "embedding",
+            postgresql_using="hnsw",
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
         Index("ix_chunk_tsv", "tsv", postgresql_using="gin"),
@@ -206,8 +214,13 @@ class Claim(Base):
         CheckConstraint(_in("claim_type", CLAIM_TYPES), name="claim_type"),
         CheckConstraint("(filing_id IS NULL) <> (segment_id IS NULL)", name="one_source"),
         UniqueConstraint(
-            "filing_id", "segment_id", "span_start", "span_end", "extractor_version",
-            name="uq_claim_span", postgresql_nulls_not_distinct=True,
+            "filing_id",
+            "segment_id",
+            "span_start",
+            "span_end",
+            "extractor_version",
+            name="uq_claim_span",
+            postgresql_nulls_not_distinct=True,
         ),
     )
 
@@ -331,7 +344,8 @@ class EvalRun(Base):
     # Which eval of the layer (retrieval, ner, wer, forecast share L1). Defaults to the layer
     # so writers that do not set it keep working.
     name: Mapped[str] = mapped_column(
-        String(40), default=lambda ctx: ctx.get_current_parameters()["layer"])
+        String(40), default=lambda ctx: ctx.get_current_parameters()["layer"]
+    )
     metrics: Mapped[dict] = mapped_column(JSONB)
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
     __table_args__ = (Index("ix_eval_run_latest", "layer", "name", "created_at"),)

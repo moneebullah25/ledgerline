@@ -27,16 +27,31 @@ def main() -> None:
     a = p.parse_args()
     t0 = time.perf_counter()
     with session() as s:
-        companies = s.scalars(select(Company.id).where(
-            Company.ticker == a.ticker if a.ticker else True)).all()
-        filings = s.scalars(select(Filing.id).where(
-            Filing.form_type == "8-K", Filing.company_id.in_(companies),
-            ~exists().where(Claim.filing_id == Filing.id, Claim.extractor_version == extractor_version()),
-        ).order_by(Filing.id)).all()
-        calls = s.scalars(select(CallAudio.id).where(
-            CallAudio.kind == "earnings_call", CallAudio.company_id.in_(companies),
-            exists().where(Segment.call_audio_id == CallAudio.id))).all()
-    for kind, ids, fn in (("filing", filings, extract_for_filing), ("call", calls, extract_for_call)):
+        companies = s.scalars(
+            select(Company.id).where(Company.ticker == a.ticker if a.ticker else True)
+        ).all()
+        filings = s.scalars(
+            select(Filing.id)
+            .where(
+                Filing.form_type == "8-K",
+                Filing.company_id.in_(companies),
+                ~exists().where(
+                    Claim.filing_id == Filing.id, Claim.extractor_version == extractor_version()
+                ),
+            )
+            .order_by(Filing.id)
+        ).all()
+        calls = s.scalars(
+            select(CallAudio.id).where(
+                CallAudio.kind == "earnings_call",
+                CallAudio.company_id.in_(companies),
+                exists().where(Segment.call_audio_id == CallAudio.id),
+            )
+        ).all()
+    for kind, ids, fn in (
+        ("filing", filings, extract_for_filing),
+        ("call", calls, extract_for_call),
+    ):
         for i in ids:
             try:
                 with session() as s:

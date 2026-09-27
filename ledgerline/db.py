@@ -15,8 +15,7 @@ VERIFY_WORKERS = settings().verify_workers
 def engine() -> Engine:
     # One connection per verify worker plus the report's own Session; overflow covers the
     # API threadpool and bursts.
-    return create_engine(settings().database_url, pool_pre_ping=True,
-                         pool_size=VERIFY_WORKERS + 1)
+    return create_engine(settings().database_url, pool_pre_ping=True, pool_size=VERIFY_WORKERS + 1)
 
 
 @contextmanager

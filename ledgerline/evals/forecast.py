@@ -32,8 +32,7 @@ def main() -> None:
                 if len(y) < HOLDOUT + MIN_TRAIN:
                     skipped.append({"ticker": ticker, "concept": concept, "n": len(y)})
                     continue
-                rows.append({"ticker": ticker, "concept": concept, "n": len(y),
-                             **backtest(y, H)})
+                rows.append({"ticker": ticker, "concept": concept, "n": len(y), **backtest(y, H)})
                 print(rows[-1], flush=True)
         if not rows:
             raise SystemExit(f"no series long enough ({len(skipped)} skipped)")
@@ -46,11 +45,18 @@ def main() -> None:
             "share_beating_naive": float((ens < 1.0).mean()),
             "series": len(rows),
         } | {f"mase_{m}": float(np.mean([r[m] for r in rows])) for m in models}
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
-                             check=False).stdout
-        s.add(EvalRun(git_sha=sha.strip() or None, layer="L1", name="forecast", metrics=metrics,
-                      details={"horizon": H, "holdout": HOLDOUT, "rows": rows,
-                               "skipped": skipped}))
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+        ).stdout
+        s.add(
+            EvalRun(
+                git_sha=sha.strip() or None,
+                layer="L1",
+                name="forecast",
+                metrics=metrics,
+                details={"horizon": H, "holdout": HOLDOUT, "rows": rows, "skipped": skipped},
+            )
+        )
     print(metrics)
 
 

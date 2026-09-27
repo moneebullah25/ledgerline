@@ -6,7 +6,8 @@ from ledgerline.evals.wer import _tokens, align, label_accuracy, normalize
 
 def test_normalize_matches_spoken_and_written_forms():
     assert normalize("Inflation fell to 2.2 percent. [Laughter]") == normalize(
-        "inflation fell to 2.2%")
+        "inflation fell to 2.2%"
+    )
 
 
 def test_align_cuts_reference_at_excerpt_end():
@@ -25,11 +26,15 @@ def test_align_ignores_stray_short_match_far_ahead():
 
 
 def test_label_accuracy_by_aligned_words():
-    ref_turns = [{"text": "good afternoon everyone", "role": "executive"},
-                 {"text": "steve", "role": "operator"},
-                 {"text": "thank you mr chairman", "role": "analyst"}]
-    hyp_turns = [{"text": "good afternoon everyone steve", "role": "executive"},
-                 {"text": "thank you mister chairman", "role": "executive"}]
+    ref_turns = [
+        {"text": "good afternoon everyone", "role": "executive"},
+        {"text": "steve", "role": "operator"},
+        {"text": "thank you mr chairman", "role": "analyst"},
+    ]
+    hyp_turns = [
+        {"text": "good afternoon everyone steve", "role": "executive"},
+        {"text": "thank you mister chairman", "role": "executive"},
+    ]
     ref, ref_owner = _tokens(ref_turns)
     hyp, hyp_owner = _tokens(hyp_turns)
     _, pairs = align(ref, hyp)

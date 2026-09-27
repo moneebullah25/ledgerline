@@ -22,9 +22,14 @@ from ledgerline.schemas import CriticOutput
 _GOOD_OUTPUT = CriticOutput(counter_stance="insufficient", argument="derived fact")
 
 
-def _make_response(parsed_output=_GOOD_OUTPUT, stop_reason="end_turn",
-                   input_tokens=100, output_tokens=20,
-                   cache_read=50, cache_write=10):
+def _make_response(
+    parsed_output=_GOOD_OUTPUT,
+    stop_reason="end_turn",
+    input_tokens=100,
+    output_tokens=20,
+    cache_read=50,
+    cache_write=10,
+):
     usage = types.SimpleNamespace(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -50,6 +55,7 @@ def _sdk_monkeypatch(monkeypatch):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def _reset_settings(monkeypatch):
     """Always clean up settings after each test."""
@@ -70,12 +76,14 @@ def sdk_client(monkeypatch):
 # 1. Param shaping: model, system, messages, max_tokens
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_sdk_passes_correct_params(sdk_client):
     sdk_client.messages.parse.return_value = _make_response()
 
-    llm.structured("fast", "my-system", {"filing": "text"}, "Analyze.", CriticOutput,
-                   max_tokens=1234)
+    llm.structured(
+        "fast", "my-system", {"filing": "text"}, "Analyze.", CriticOutput, max_tokens=1234
+    )
 
     call_kwargs = sdk_client.messages.parse.call_args.kwargs
     assert call_kwargs["model"] == llm.TIERS["fast"]
@@ -106,6 +114,7 @@ def test_sdk_prompt_contains_data_block(sdk_client):
 # 2. Prompt injection neutralisation (same as CLI path)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_sdk_neutralises_document_tags(sdk_client):
     sdk_client.messages.parse.return_value = _make_response()
@@ -121,9 +130,11 @@ def test_sdk_neutralises_document_tags(sdk_client):
 # 3. Error mapping
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.unit
 def test_sdk_rate_limit_error_raises_rate_limited(monkeypatch):
     import anthropic
+
     _sdk_monkeypatch(monkeypatch)
     client = MagicMock()
     client.messages.parse.side_effect = anthropic.RateLimitError(
@@ -138,6 +149,7 @@ def test_sdk_rate_limit_error_raises_rate_limited(monkeypatch):
 @pytest.mark.unit
 def test_sdk_credentials_error_raises_llm_unavailable(monkeypatch):
     import anthropic
+
     _sdk_monkeypatch(monkeypatch)
     client = MagicMock()
     client.messages.parse.side_effect = anthropic.CredentialsError("bad key")
@@ -150,6 +162,7 @@ def test_sdk_credentials_error_raises_llm_unavailable(monkeypatch):
 @pytest.mark.unit
 def test_sdk_connection_error_raises_llm_unavailable(monkeypatch):
     import anthropic
+
     _sdk_monkeypatch(monkeypatch)
     client = MagicMock()
     client.messages.parse.side_effect = anthropic.APIConnectionError(request=MagicMock())
@@ -164,6 +177,7 @@ def test_sdk_auth_status_error_raises_llm_unavailable(monkeypatch):
     """APIStatusError with 401/403 → LLMUnavailable (not re-raised as-is)."""
     import anthropic
     import httpx
+
     _sdk_monkeypatch(monkeypatch)
     resp = httpx.Response(401, request=httpx.Request("POST", "https://api.anthropic.com"))
     client = MagicMock()
@@ -181,6 +195,7 @@ def test_sdk_server_error_raises_llm_unavailable(monkeypatch):
     """APIStatusError with 5xx → LLMUnavailable."""
     import anthropic
     import httpx
+
     _sdk_monkeypatch(monkeypatch)
     resp = httpx.Response(503, request=httpx.Request("POST", "https://api.anthropic.com"))
     client = MagicMock()
@@ -196,6 +211,7 @@ def test_sdk_server_error_raises_llm_unavailable(monkeypatch):
 # ---------------------------------------------------------------------------
 # 4. Usage extraction
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_sdk_usage_extraction(sdk_client):
@@ -225,6 +241,7 @@ def test_sdk_usage_none_cache_fields_default_to_zero(sdk_client):
 # ---------------------------------------------------------------------------
 # 5. Structured deserialization
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.unit
 def test_sdk_deserialized_output_matches_schema(sdk_client):

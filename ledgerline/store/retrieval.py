@@ -60,8 +60,9 @@ def _filters(filing_ids: list[int] | None) -> str:
     return "f.company_id = :cid" + ("" if filing_ids is None else " AND c.filing_id = ANY(:fids)")
 
 
-def sparse_ids(s: Session, query: str, company_id: int,
-               filing_ids: list[int] | None = None, n: int = LEG_DEPTH) -> list[int]:
+def sparse_ids(
+    s: Session, query: str, company_id: int, filing_ids: list[int] | None = None, n: int = LEG_DEPTH
+) -> list[int]:
     sql = f"""
         SELECT c.id FROM chunk c JOIN filing f ON f.id = c.filing_id,
              websearch_to_tsquery('english', :q) q
@@ -71,8 +72,9 @@ def sparse_ids(s: Session, query: str, company_id: int,
     return list(s.scalars(text(sql), params))
 
 
-def dense_ids(s: Session, qvec, company_id: int,
-              filing_ids: list[int] | None = None, n: int = LEG_DEPTH) -> list[int]:
+def dense_ids(
+    s: Session, qvec, company_id: int, filing_ids: list[int] | None = None, n: int = LEG_DEPTH
+) -> list[int]:
     # hnsw stops after ef_search candidates; with a company filter most of those belong to
     # other companies. pgvector >= 0.8 iterative scans keep walking the graph until n
     # filtered rows are found, in exact distance order.
@@ -106,21 +108,47 @@ def _load(s: Session, ids: list[int]) -> dict[int, _Row]:
                 WHERE c.id IN :ids""").bindparams(bindparam("ids", expanding=True)),
         {"ids": ids},
     )
-    return {r.id: _Row(r.filing_id, r.section_path, r.text, r.char_start, r.char_end,
-                       passage(r.name, r.form_type, r.fiscal_year, r.fiscal_period,
-                               r.period_of_report, r.section_path, r.text))
-            for r in rows}
+    return {
+        r.id: _Row(
+            r.filing_id,
+            r.section_path,
+            r.text,
+            r.char_start,
+            r.char_end,
+            passage(
+                r.name,
+                r.form_type,
+                r.fiscal_year,
+                r.fiscal_period,
+                r.period_of_report,
+                r.section_path,
+                r.text,
+            ),
+        )
+        for r in rows
+    }
 
 
-def search(s: Session, query: str, *, company_id: int, k: int = 10,
-           filing_ids: list[int] | None = None, rerank: bool = True,
-           db_lock: AbstractContextManager | None = None) -> list[Hit]:
+def search(
+    s: Session,
+    query: str,
+    *,
+    company_id: int,
+    k: int = 10,
+    filing_ids: list[int] | None = None,
+    rerank: bool = True,
+    db_lock: AbstractContextManager | None = None,
+) -> list[Hit]:
     """db_lock guards only the DB reads (callers sharing one Session across threads pass a
     Lock); the query embedding and the rerank run outside it."""
     qvec = embed.embed_query(query)
     with db_lock or nullcontext():
-        fused = rrf([sparse_ids(s, query, company_id, filing_ids),
-                     dense_ids(s, qvec, company_id, filing_ids)])
+        fused = rrf(
+            [
+                sparse_ids(s, query, company_id, filing_ids),
+                dense_ids(s, qvec, company_id, filing_ids),
+            ]
+        )
         scored = fused[:RERANK_DEPTH] if rerank else fused[:k]
         rows = _load(s, [cid for cid, _ in scored])
     if rerank and scored:

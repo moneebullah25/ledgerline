@@ -51,18 +51,30 @@ def ingest_xbrl_facts(s: Session, ticker: str) -> int:
 
     # A tag we loaded before that is gone from the payload is schema drift, not silence.
     present = {r["tag"] for r in rows}
-    stored = set(s.scalars(select(XbrlFact.tag).where(XbrlFact.company_id == company_id).distinct()))
+    stored = set(
+        s.scalars(select(XbrlFact.tag).where(XbrlFact.company_id == company_id).distinct())
+    )
     for tag in sorted(stored - present):
-        record_failure(s, "ingest_xbrl_facts", f"{ticker}:{tag}", f"{tag} vanished from {url}",
-                       cls="schema_drift")
+        record_failure(
+            s,
+            "ingest_xbrl_facts",
+            f"{ticker}:{tag}",
+            f"{tag} vanished from {url}",
+            cls="schema_drift",
+        )
 
     now = datetime.now(UTC)
     for r in rows:
         # source_url is the filing a reader can open to check the number; sha256 is of the
         # companyfacts payload the value was actually read from (kept in the object store).
         acc = r["accession_no"]
-        r |= {"company_id": company_id, "fetched_at": now, "sha256": sha, "license_note": LICENSE,
-              "source_url": f"{ARCHIVES}/{int(cik)}/{acc.replace('-', '')}/{acc}-index.html"}
+        r |= {
+            "company_id": company_id,
+            "fetched_at": now,
+            "sha256": sha,
+            "license_note": LICENSE,
+            "source_url": f"{ARCHIVES}/{int(cik)}/{acc.replace('-', '')}/{acc}-index.html",
+        }
     # A changed payload (a corrected value, an amendment that moves a YTD base) or a parser
     # fix must not leave a stale row behind: rows whose parsed content differs in any column
     # are updated, and derived quarters the new payload no longer produces are deleted.
@@ -71,15 +83,23 @@ def ingest_xbrl_facts(s: Session, ticker: str) -> int:
     stmt = stmt.on_conflict_do_update(
         constraint="uq_xbrl_fact",
         set_={c: stmt.excluded[c] for c in _CONTENT + ("fetched_at", "sha256")},
-        where=tuple_(*(getattr(XbrlFact, c) for c in _CONTENT))
-        .is_distinct_from(tuple_(*(stmt.excluded[c] for c in _CONTENT))),
+        where=tuple_(*(getattr(XbrlFact, c) for c in _CONTENT)).is_distinct_from(
+            tuple_(*(stmt.excluded[c] for c in _CONTENT))
+        ),
     ).returning(XbrlFact.id)
-    written = sum(len(s.execute(stmt, rows[i:i + 2000]).all()) for i in range(0, len(rows), 2000))
+    written = sum(len(s.execute(stmt, rows[i : i + 2000]).all()) for i in range(0, len(rows), 2000))
 
     derived = {_key(r) for r in rows if r["derived"]}
-    existing = s.execute(select(XbrlFact.id, XbrlFact.tag, XbrlFact.unit, XbrlFact.period_start,
-                                XbrlFact.period_end, XbrlFact.accession_no)
-                         .where(XbrlFact.company_id == company_id, XbrlFact.derived))
+    existing = s.execute(
+        select(
+            XbrlFact.id,
+            XbrlFact.tag,
+            XbrlFact.unit,
+            XbrlFact.period_start,
+            XbrlFact.period_end,
+            XbrlFact.accession_no,
+        ).where(XbrlFact.company_id == company_id, XbrlFact.derived)
+    )
     stale = [i for i, *k in existing if tuple(k) not in derived]
     if stale:
         s.execute(delete(XbrlFact).where(XbrlFact.id.in_(stale)))
@@ -109,21 +129,30 @@ def parse_companyfacts(payload: dict) -> list[dict]:
                     continue
                 start = date.fromisoformat(f["start"]) if "start" in f else None
                 end = date.fromisoformat(f["end"])
-                facts.append({
-                    "tag": tag, "unit": UNITS[unit], "value": Decimal(str(f["val"])),
-                    "period_start": start, "period_end": end,
-                    "duration_days": (end - start).days if start else None,
-                    "fiscal_year": f["fy"], "fiscal_period": f["fp"], "form": f["form"],
-                    "accession_no": f["accn"], "filed": date.fromisoformat(f["filed"]),
-                    "derived": False,
-                })
+                facts.append(
+                    {
+                        "tag": tag,
+                        "unit": UNITS[unit],
+                        "value": Decimal(str(f["val"])),
+                        "period_start": start,
+                        "period_end": end,
+                        "duration_days": (end - start).days if start else None,
+                        "fiscal_year": f["fy"],
+                        "fiscal_period": f["fp"],
+                        "form": f["form"],
+                        "accession_no": f["accn"],
+                        "filed": date.fromisoformat(f["filed"]),
+                        "derived": False,
+                    }
+                )
     if not facts:
         raise KeyError("no mapped us-gaap tags in companyfacts payload")
 
     current_end: dict[str, date] = {}
     for f in facts:
-        current_end[f["accession_no"]] = max(current_end.get(f["accession_no"], f["period_end"]),
-                                             f["period_end"])
+        current_end[f["accession_no"]] = max(
+            current_end.get(f["accession_no"], f["period_end"]), f["period_end"]
+        )
     rows: dict[tuple, dict] = {}
     for f in facts:
         if f["period_end"] != current_end[f["accession_no"]]:
@@ -167,9 +196,16 @@ def _derive_quarters(facts: list[dict]) -> list[dict]:
         for q, prev in PREV.items():
             ytd = got.get((YTD_SPAN[q], q))
             before = cum.get(prev)
-            if quarter[q] is None and ytd and before and ytd["period_start"] == before["period_start"]:
+            if (
+                quarter[q] is None
+                and ytd
+                and before
+                and ytd["period_start"] == before["period_start"]
+            ):
                 quarter[q] = {
-                    **ytd, "value": ytd["value"] - before["value"], "derived": True,
+                    **ytd,
+                    "value": ytd["value"] - before["value"],
+                    "derived": True,
                     "period_start": before["period_end"] + timedelta(days=1),
                     "fiscal_period": q,
                 }
@@ -179,6 +215,9 @@ def _derive_quarters(facts: list[dict]) -> list[dict]:
             if ytd:
                 cum[q] = ytd
             elif before and quarter[q]:
-                cum[q] = {**quarter[q], "value": before["value"] + quarter[q]["value"],
-                          "period_start": before["period_start"]}
+                cum[q] = {
+                    **quarter[q],
+                    "value": before["value"] + quarter[q]["value"],
+                    "period_start": before["period_start"],
+                }
     return derived

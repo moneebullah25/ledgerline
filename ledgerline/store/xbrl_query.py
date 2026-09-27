@@ -39,8 +39,9 @@ def _period_filter(fiscal_period: str):
     )
 
 
-def get_xbrl_fact(s: Session, cik: str, concept: str, fiscal_year: int,
-                  fiscal_period: str) -> Fact | None:
+def get_xbrl_fact(
+    s: Session, cik: str, concept: str, fiscal_year: int, fiscal_period: str
+) -> Fact | None:
     c = CONCEPTS.get(concept)
     if c is None:
         return None
@@ -51,22 +52,47 @@ def get_xbrl_fact(s: Session, cik: str, concept: str, fiscal_year: int,
         if a is None or b is None or (c.ratio_of and b.value == 0):
             return None
         value = a.value / b.value * 100 if c.ratio_of else a.value - b.value
-        return Fact(value, c.unit, a.fact_ids + b.fact_ids, concept, fiscal_year,
-                    fiscal_period, a.period_end, a.derived or b.derived, a.source_url, (a, b))
+        return Fact(
+            value,
+            c.unit,
+            a.fact_ids + b.fact_ids,
+            concept,
+            fiscal_year,
+            fiscal_period,
+            a.period_end,
+            a.derived or b.derived,
+            a.source_url,
+            (a, b),
+        )
 
     for tag in c.tags:  # preference order: the first tag with a value for the period wins
         row = s.scalars(
-            select(XbrlFact).join(Company, Company.id == XbrlFact.company_id)
-            .where(Company.cik == cik.zfill(10), XbrlFact.tag == tag, XbrlFact.unit == c.unit,
-                   XbrlFact.fiscal_year == fiscal_year, _period_filter(fiscal_period))
+            select(XbrlFact)
+            .join(Company, Company.id == XbrlFact.company_id)
+            .where(
+                Company.cik == cik.zfill(10),
+                XbrlFact.tag == tag,
+                XbrlFact.unit == c.unit,
+                XbrlFact.fiscal_year == fiscal_year,
+                _period_filter(fiscal_period),
+            )
             # As-filed beats derived; among duplicates the earliest original filing wins
             # over later amendments (what the market saw at the time of the claim).
             .order_by(XbrlFact.derived, XbrlFact.form.like("%/A"), XbrlFact.filed, XbrlFact.id)
             .limit(1)
         ).first()
         if row is not None:
-            return Fact(float(row.value), c.unit, (row.id,), concept, fiscal_year,
-                        fiscal_period, row.period_end, row.derived, row.source_url)
+            return Fact(
+                float(row.value),
+                c.unit,
+                (row.id,),
+                concept,
+                fiscal_year,
+                fiscal_period,
+                row.period_end,
+                row.derived,
+                row.source_url,
+            )
     return None
 
 
@@ -74,9 +100,12 @@ def get_series(s: Session, cik: str, concept: str, fiscal_period_kind: str = "Q"
     """Quarterly (kind "Q") or annual (kind "FY") history, oldest first."""
     fps = {"Q": ("Q1", "Q2", "Q3", "Q4"), "FY": ("FY",)}[fiscal_period_kind]
     periods = s.execute(
-        select(XbrlFact.fiscal_year, XbrlFact.fiscal_period).distinct()
+        select(XbrlFact.fiscal_year, XbrlFact.fiscal_period)
+        .distinct()
         .join(Company, Company.id == XbrlFact.company_id)
         .where(Company.cik == cik.zfill(10), XbrlFact.fiscal_period.in_(fps))
     ).all()
     facts = (get_xbrl_fact(s, cik, concept, fy, fp) for fy, fp in periods)
-    return sorted((f for f in facts if f is not None), key=lambda f: (f.period_end, f.fiscal_period))
+    return sorted(
+        (f for f in facts if f is not None), key=lambda f: (f.period_end, f.fiscal_period)
+    )

@@ -34,8 +34,10 @@ log = logging.getLogger("ledgerline.worker")
 
 def claim_next(s: Session) -> uuid.UUID | None:
     report = s.scalars(
-        select(Report).where(Report.status == "queued")
-        .order_by(Report.created_at, Report.id).limit(1)
+        select(Report)
+        .where(Report.status == "queued")
+        .order_by(Report.created_at, Report.id)
+        .limit(1)
         .with_for_update(skip_locked=True)
     ).first()
     if report is None:
@@ -55,12 +57,18 @@ def claim_next(s: Session) -> uuid.UUID | None:
 def sweep_stale(s: Session, now: datetime | None = None) -> int:
     cutoff = (now or datetime.now(UTC)) - STALE_AFTER
     stale = s.scalars(
-        select(Report).where(
+        select(Report)
+        .where(
             Report.status == "running",
-            cast(func.coalesce(Report.config["heartbeat_at"].astext,
-                               Report.config["started_at"].astext),
-                 DateTime(timezone=True)) < cutoff,
-        ).with_for_update(skip_locked=True)
+            cast(
+                func.coalesce(
+                    Report.config["heartbeat_at"].astext, Report.config["started_at"].astext
+                ),
+                DateTime(timezone=True),
+            )
+            < cutoff,
+        )
+        .with_for_update(skip_locked=True)
     ).all()
     for r in stale:
         if r.config.get("attempts", 1) >= MAX_ATTEMPTS:
