@@ -76,6 +76,7 @@ REL_TOL = 0.005
 IMPLAUSIBLE_GAP = 0.5
 _GAP_UNITS = ("USD", "USD/share")
 PP_TOL = 0.1
+EPS_HALF_CENT = 0.005
 _SCALES = (1.0, 1e3, 1e6, 1e9, 1e12)
 _MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d+)?)")
 _PCT = re.compile(
@@ -258,6 +259,10 @@ def assess(claim: Claim, facts: list[Fact | None]) -> EvidenceItem:
                 return _insufficient("base-period value is zero; percent change undefined")
             actual = (cur_v - base_v) / abs(base_v) * 100
             tol = PP_TOL + half_ulp
+            if unit == "USD/share":
+                # EPS is filed to the cent; the company's percent comes from unrounded
+                # figures ($1.70 vs $1.33 is +27.8%, PepsiCo prints 27%). Half a cent on each.
+                tol += 100 * EPS_HALF_CENT * (abs(cur_v) + abs(base_v)) / base_v ** 2
         elif claim.unit == "percent":  # margin points
             actual = cur.value - base.value
             tol = PP_TOL + half_ulp

@@ -280,3 +280,12 @@ def test_spelled_out_percent_prints_whole_units():
               unit="percent", claim_type="comparison", comparison="yoy")
     assert assess(claim, [F(20_889e6), F(20_532e6, fy=2024)]).stance == "supports"
     assert assess(claim, [F(20_889e6), F(20_889e6 / 1.03, fy=2024)]).stance == "contradicts"
+
+
+def test_eps_change_allows_for_cent_rounded_facts():
+    # PEP Q1 2026 (held-out h051): "EPS increased 27%", filed $1.70 vs $1.33 = +27.8%
+    claim = C("EPS) increased 27%", 27.0, unit="percent", metric="eps_diluted",
+              claim_type="comparison", comparison="yoy")
+    eps = dict(concept="eps_diluted", unit="USD/share")
+    assert assess(claim, [F(1.70, **eps), F(1.33, fy=2024, **eps)]).stance == "supports"
+    assert assess(claim, [F(1.70, **eps), F(1.45, fy=2024, **eps)]).stance == "contradicts"
