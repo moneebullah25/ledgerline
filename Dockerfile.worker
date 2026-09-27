@@ -16,12 +16,18 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra ml
 
 # ponytail: CPU-only wheels; add CUDA extras if GPU inference is needed.
-# --force-reinstall overwrites the CUDA torch uv sync placed in .venv; without it
-# (or with --no-deps) the CUDA wheel stays and the image stays at ~11 GB.
-# Regenerating uv.lock with [tool.uv.sources] + UV_TORCH_BACKEND=cpu removes this step.
+# Step 1: overwrite the CUDA torch/torchvision/torchaudio wheels with CPU-only variants.
+# Step 2: remove nvidia-*, triton, and cuda-* packages that the CUDA torch dragged in as
+#   separate dist-info packages — they are NOT dependencies of the CPU wheel so pip does not
+#   remove them automatically, but they account for ~4 GB (nvidia 3.3 GB + triton 817 MB).
+# Regenerating uv.lock with [tool.uv.sources] + UV_TORCH_BACKEND=cpu removes both steps.
 RUN uv pip install --python /app/.venv --force-reinstall \
     --index-url https://download.pytorch.org/whl/cpu \
     torch torchvision torchaudio
+RUN SP=/app/.venv/lib/python3.12/site-packages && \
+    rm -rf "$SP/nvidia" "$SP/triton" "$SP/cuda" && \
+    find "$SP" -maxdepth 1 -name 'nvidia_*.dist-info' -o -name 'triton-*.dist-info' \
+               -o -name 'cuda_*.dist-info' | xargs rm -rf
 
 FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg poppler-utils \
