@@ -43,11 +43,11 @@ def ingest_call_audio(
     if suffix not in AUDIO_SUFFIXES:
         raise ValueError(f"not an audio file type ({suffix or 'no suffix'}): {path_or_url}")
     if url.scheme:
-        if url.scheme != "https" or url.hostname not in {h.lower() for h in settings().audio_hosts}:
+        allowed = frozenset(h.lower() for h in settings().audio_hosts)
+        if url.scheme != "https" or url.hostname not in allowed:
             raise ValueError(
                 f"audio URL not allowed (https + LEDGERLINE_AUDIO_HOSTS): {path_or_url}"
             )
-        allowed = frozenset(h.lower() for h in settings().audio_hosts)
         data, source_url = (
             get(path_or_url, {}, max_bytes=MAX_AUDIO_BYTES, allowed_hosts=allowed),
             path_or_url,

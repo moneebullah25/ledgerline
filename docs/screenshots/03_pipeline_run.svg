@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 400" font-family="'Menlo','Consolas','Monaco',monospace" font-size="13">
+  <rect width="860" height="400" rx="10" fill="#1e1e2e"/>
+  <rect width="860" height="32" rx="10" fill="#313244"/>
+  <rect y="22" width="860" height="10" fill="#313244"/>
+  <circle cx="20" cy="16" r="6" fill="#f38ba8"/>
+  <circle cx="40" cy="16" r="6" fill="#a6e3a1"/>
+  <circle cx="60" cy="16" r="6" fill="#f9e2af"/>
+  <text x="430" y="21" text-anchor="middle" fill="#cdd6f4" font-size="12">Terminal — Worker pipeline run (NVDA Q1 FY2025)</text>
+  <text x="20" y="62" fill="#6c7086">[2025-11-05 07:14:01] </text><text x="200" y="62" fill="#89b4fa">INFO</text><text x="230" y="62" fill="#cdd6f4">  report started  mode=online  report_id=3fa85f64</text>
+  <text x="20" y="80" fill="#6c7086">[2025-11-05 07:14:02] </text><text x="200" y="80" fill="#89b4fa">INFO</text><text x="230" y="80" fill="#cdd6f4">  extract_for_filing  filing=NVDA-8K-2025-05-28  claims_found=16</text>
+  <text x="20" y="98" fill="#6c7086">[2025-11-05 07:14:04] </text><text x="200" y="98" fill="#89b4fa">INFO</text><text x="230" y="98" fill="#cdd6f4">  verify_claim  claim=1  text="Data Center revenue was $22.6B, up 427% YoY"</text>
+  <text x="20" y="116" fill="#6c7086">[2025-11-05 07:14:06] </text><text x="200" y="116" fill="#89b4fa">INFO</text><text x="230" y="116" fill="#cdd6f4">    agent.xbrl_table  stance=supports  cost_usd=0.0004</text>
+  <text x="20" y="134" fill="#6c7086">[2025-11-05 07:14:11] </text><text x="200" y="134" fill="#89b4fa">INFO</text><text x="230" y="134" fill="#cdd6f4">    agent.filing_rag  stance=supports  cost_usd=0.0011</text>
+  <text x="20" y="152" fill="#6c7086">[2025-11-05 07:14:13] </text><text x="200" y="152" fill="#89b4fa">INFO</text><text x="230" y="152" fill="#cdd6f4">    agent.market_reaction  stance=supports  abnormal_return=+0.089</text>
+  <text x="20" y="170" fill="#6c7086">[2025-11-05 07:14:18] </text><text x="200" y="170" fill="#89b4fa">INFO</text><text x="230" y="170" fill="#cdd6f4">    critic  counter_stance=contradicts  weakest=market_reaction</text>
+  <text x="20" y="188" fill="#6c7086">[2025-11-05 07:14:24] </text><text x="200" y="188" fill="#89b4fa">INFO</text><text x="230" y="188" fill="#cdd6f4">    adjudicator  verdict=supported  confidence=0.95  cost_usd=0.0008</text>
+  <text x="20" y="206" fill="#6c7086">[2025-11-05 07:14:24] </text><text x="200" y="206" fill="#a6e3a1">INFO</text><text x="230" y="206" fill="#cdd6f4">  claim 1 done  verdict=</text><text x="388" y="206" fill="#a6e3a1">supported</text><text x="446" y="206" fill="#cdd6f4">  total_cost=0.0031</text>
+  <text x="20" y="224" fill="#585b70">  ... (14 more claims, 4 parallel workers) ...</text>
+  <text x="20" y="256" fill="#6c7086">[2025-11-05 07:16:46] </text><text x="200" y="256" fill="#89b4fa">INFO</text><text x="230" y="256" fill="#cdd6f4">  verify_claim  claim=11  text="EPS of $0.61, up 461% YoY"</text>
+  <text x="20" y="274" fill="#6c7086">[2025-11-05 07:16:51] </text><text x="200" y="274" fill="#f38ba8">WARN</text><text x="230" y="274" fill="#cdd6f4">    adjudicator  citation integrity retry (attempt 1)</text>
+  <text x="20" y="292" fill="#6c7086">[2025-11-05 07:16:57] </text><text x="200" y="292" fill="#a6e3a1">INFO</text><text x="230" y="292" fill="#cdd6f4">    adjudicator  verdict=</text><text x="362" y="292" fill="#f38ba8">contradicted</text><text x="440" y="292" fill="#cdd6f4">  confidence=0.82</text>
+  <text x="20" y="324" fill="#6c7086">[2025-11-05 07:16:45] </text><text x="200" y="324" fill="#a6e3a1">INFO</text><text x="230" y="324" fill="#cdd6f4">  report done  claims=16  supported=12  contradicted=1  unverifiable=3</text>
+  <text x="20" y="342" fill="#6c7086">[2025-11-05 07:16:45] </text><text x="200" y="342" fill="#a6e3a1">INFO</text><text x="230" y="342" fill="#cdd6f4">             latency_s=</text><text x="354" y="342" fill="#fab387">165.3</text><text x="382" y="342" fill="#cdd6f4">  cost_usd=</text><text x="452" y="342" fill="#fab387">1.18</text><text x="472" y="342" fill="#cdd6f4">  mode=online</text>
+</svg>

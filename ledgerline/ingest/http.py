@@ -48,14 +48,17 @@ class ResponseTooLarge(ValueError):
     pass
 
 
-def _https_only(req: httpx.Request) -> None:
+def _check_hop(req: httpx.Request) -> None:
     # Checked on every hop BEFORE it is sent: checking the final URL after httpx followed the
     # redirects would already have sent a request to an http:// or internal target.
     if req.url.scheme != "https":
         raise ValueError(f"refusing non-https request {req.url}")
+    allowed = req.extensions.get("allowed_hosts")
+    if allowed is not None and req.url.host not in allowed:
+        raise ValueError(f"refusing request to disallowed host {req.url.host}")
 
 
-_client = httpx.Client(timeout=30, follow_redirects=True, event_hooks={"request": [_https_only]})
+_client = httpx.Client(timeout=30, follow_redirects=True, event_hooks={"request": [_check_hop]})
 _backoff = wait_exponential_jitter(initial=1, max=60)
 
 
@@ -95,11 +98,8 @@ def get(
         raise ValueError(f"refusing non-https URL {url}")
     if throttle:
         _throttle()
-    with _client.stream("GET", url, headers=headers) as r:
-        if r.url.scheme != "https":
-            raise ValueError(f"redirected to non-https URL {r.url}")
-        if allowed_hosts is not None and r.url.host not in allowed_hosts:
-            raise ValueError(f"redirect to disallowed host {r.url.host}")
+    ext = {} if allowed_hosts is None else {"allowed_hosts": allowed_hosts}
+    with _client.stream("GET", url, headers=headers, extensions=ext) as r:
         if r.status_code == 429 or r.status_code >= 500:
             raise TransientFetchError(
                 f"HTTP {r.status_code} for {url}", _retry_after(r.headers.get("Retry-After"))

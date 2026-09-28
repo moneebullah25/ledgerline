@@ -198,7 +198,7 @@ def _predict_one(s: Session, r: dict, agents: dict | None = None) -> dict:
             "refused": res.refused,
             "evidence": {e.agent: e for e in res.evidence},
         }
-    except (SQLAlchemyError, ImportError, llm.RateLimited):
+    except (SQLAlchemyError, ImportError, llm.LLMUnavailable):
         raise
     except Exception as e:  # noqa: BLE001 - scored as the pipeline stores it
         return {

@@ -19,7 +19,7 @@ def engine() -> Engine:
         settings().database_url,
         pool_pre_ping=True,
         pool_size=VERIFY_WORKERS + 1,
-        connect_args={"connect_timeout": 5, "options": "-c statement_timeout=10000"},
+        connect_args={"connect_timeout": 5},
     )
 
 

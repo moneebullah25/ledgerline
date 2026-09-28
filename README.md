@@ -14,6 +14,14 @@ Ledgerline takes a company ticker + fiscal quarter and:
 
 ## Demo
 
+### Screenshots
+
+| Queue a report & poll | Claim verdict with evidence | Worker pipeline log |
+|---|---|---|
+| ![Queue report](docs/screenshots/01_queue_report.svg) | ![Claim verdict](docs/screenshots/02_claim_verdict.svg) | ![Pipeline run](docs/screenshots/03_pipeline_run.svg) |
+
+### API walkthrough
+
 POST a report request — results stream in via polling:
 
 ```bash

@@ -121,6 +121,24 @@ def test_downloads_are_https_only_and_size_capped(monkeypatch):
     assert http.error_class(http.ResponseTooLarge("x")) == "too_large"
 
 
+@respx.mock
+def test_allowed_hosts_blocks_redirect_before_request_is_sent(monkeypatch):
+    monkeypatch.setattr(http.get.retry, "sleep", lambda _: None)
+    evil_route = respx.get("https://evil.example/x").mock(
+        return_value=httpx.Response(200, content=b"pwned")
+    )
+    respx.get("https://ir.example.com/call.mp3").mock(
+        return_value=httpx.Response(302, headers={"Location": "https://evil.example/x"})
+    )
+    with pytest.raises(ValueError, match="disallowed host"):
+        http.get(
+            "https://ir.example.com/call.mp3",
+            {},
+            allowed_hosts=frozenset(["ir.example.com"]),
+        )
+    assert not evil_route.called  # the redirect was never followed
+
+
 def test_read_object_rejects_paths_outside_data_dir(data_dir):
     (data_dir.parent / "secret").write_bytes(b"s")
     for bad in ("../secret", str(data_dir.parent / "secret")):

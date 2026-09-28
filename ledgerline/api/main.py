@@ -51,6 +51,7 @@ def get_session() -> Iterator[Session]:
     # Endpoints that write commit explicitly, so nothing depends on when FastAPI runs the
     # teardown of a yield dependency relative to sending the response.
     with Session(engine(), expire_on_commit=False) as s:
+        s.execute(text("SET LOCAL statement_timeout = '10s'"))
         yield s
 
 
