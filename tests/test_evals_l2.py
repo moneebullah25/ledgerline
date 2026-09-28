@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy.exc import OperationalError
 
+pytest.importorskip("scipy")  # l2.summarize calls clopper_pearson which needs scipy.stats.beta
 from ledgerline import llm
 from ledgerline.evals import gate, l2
 from ledgerline.graph import build
@@ -187,7 +188,6 @@ def test_remap_current_prefers_same_type_then_overlap(db):
 
 
 def test_clopper_pearson_matches_exact_reference_values():
-    pytest.importorskip("scipy")  # needs scipy.stats.beta
     # Reference values: beta quantiles (scipy.stats.beta.ppf) for the same k, n.
     assert l2.clopper_pearson(5, 10) == pytest.approx([0.187086, 0.812914], abs=1e-6)
     assert l2.clopper_pearson(0, 10) == pytest.approx([0.0, 0.308497], abs=1e-6)
@@ -197,7 +197,6 @@ def test_clopper_pearson_matches_exact_reference_values():
 
 
 def test_summarize_reports_intervals_on_the_real_set():
-    pytest.importorskip("scipy")  # needs scipy.stats.beta via clopper_pearson
     real = [
         {"id": "g1", "gold": "contradicted"},
         {"id": "g2", "gold": "supported"},

@@ -80,7 +80,7 @@ def test_post_rerun_recomputes_a_done_report(client, db):
 @pytest.mark.db
 def test_post_caps_the_queue(client, db, monkeypatch):
     seed_report(db, n_claims=0)
-    monkeypatch.setattr(api, "MAX_QUEUED", 1)
+    monkeypatch.setattr(settings(), "max_pending_reports", 1)
     ok = client.post(
         "/v1/reports", json={"ticker": "AAPL", "fiscal_year": 2025, "fiscal_period": "Q1"}
     )
