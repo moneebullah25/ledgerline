@@ -13,7 +13,6 @@ from ledgerline import llm
 from ledgerline.graph import load_prompt
 from ledgerline.graph.adjudicator import (
     TRUTH_AGENTS,
-    add_usage,
     audit,
     decide,
     needs_judgment,
@@ -105,7 +104,7 @@ def _critique_llm(claim, evidence, stance) -> tuple[CriticOutput, llm.Usage]:
     instruction = "Argue the other side."
     for _ in range(2):
         out, usage = llm.structured("standard", system, data, instruction, CriticOutput)
-        total = add_usage(total, usage)
+        total = total + usage
         # The argument can be quoted in the rationale: same number and vocabulary rules.
         if not (problems := audit(out.argument, cites, claim.text)):
             return out, total

@@ -221,7 +221,7 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
     total = llm.Usage()
     for _ in range(2):  # FR-45: fail closed after one regeneration
         v, u = llm.structured("judge", system, data, instruction, VerdictDraft)
-        total = add_usage(total, u)
+        total = total + u
         # A1: the evidence's own copy of each citation, never the model's value or quote.
         keys = dict.fromkeys((c.kind, str(c.ref_id)) for c in v.citations)
         cites = [known[k] for k in keys if k in known]
@@ -250,13 +250,3 @@ def _adjudicate_llm(claim, evidence, critic) -> tuple[VerdictDraft, llm.Usage, s
         e.usage = total
         raise
     return v, total, None
-
-
-def add_usage(a: llm.Usage, b: llm.Usage) -> llm.Usage:
-    return llm.Usage(
-        b.model,
-        a.input_tokens + b.input_tokens,
-        a.output_tokens + b.output_tokens,
-        a.cache_read_tokens + b.cache_read_tokens,
-        a.cache_write_tokens + b.cache_write_tokens,
-    )

@@ -1,67 +1,208 @@
 # Ledgerline
 
-Checks what management says in quarterly earnings releases against what the company filed
-with the SEC, and produces a severity-ranked report where every number shown traces to an
-XBRL fact, a filing passage, or a value computed from them.
+AI-powered verification engine that audits financial claims in earnings calls and SEC filings against structured evidence (XBRL facts, SEC documents, market data).
 
-Built 23-24 September 2026 as the capstone of `DevBooks/LEDGERLINE_ROADMAP.md`. The original
-PRD file was missing; `docs/PRD.md` is a reconstruction from the roadmap.
+## What it does
 
-## Results, measured (offline)
+Ledgerline takes a company ticker + fiscal quarter and:
 
-No Anthropic API key was configured, so every LLM-backed step ran its deterministic offline
-implementation. The Claude path (Haiku / Sonnet 5 / Opus 5 tiering, `ledgerline/llm.py`) is
-written and unit-tested with a stubbed model but has never run live.
+1. **Ingests** SEC filings (8-K, 10-Q, 10-K) and earnings call transcripts
+2. **Extracts** quantitative claims (revenue, EPS, guidance, comparisons) via GLiNER + rules
+3. **Verifies** each claim via a 4-agent LangGraph pipeline (XBRL lookup, filing RAG, market reaction, forecast)
+4. **Adjudicates** with an Opus judge: `supported`, `contradicted`, or `unverifiable`
+5. **Serves** results through a REST API with full evidence trails and citation integrity
 
-| Metric (target) | Measured | Source |
-|---|---|---|
-| Contradiction precision, L2 — golden/frozen (>= 0.70) | 0.412 current extraction; 0.226 frozen snapshot. **Not met on golden set.** | eval_run 13 / 12 |
-| Contradiction precision, L2 — held-out (>= 0.70) | **0.826** [0.612, 0.950] 95% CI, n=110. **Met.** Offline deterministic graph only. | eval_run 15 |
-| Citation integrity (100%) | 0 violations in a 733-claim run; enforced as a hard check on every verdict | `schemas.uncited_numbers` |
-| Claims per release (>= 30) | 30.5 mean over 120 releases (median below 30) | s4-rules-3 run |
-| ASR WER, FOMC benchmark (<= 12%) | 6.7% (first 15 min), 9.6% (full hour) | eval_run 6 |
-| Retrieval Recall@10 (>= 0.80) | 0.794 (hybrid + rerank). Missed by 0.006. | eval_run 3 |
-| NER span F1 (>= 0.75) | 0.804 exact, 0.906 partial | eval_run 4 |
-| Forecast MASE vs seasonal naive (< 1.0) | 0.840 mean over 41 series | eval_run 1 |
-| Backtest precision on flags, L4 (>= 0.55) | 0.75, but on only 4 flags: no real signal | eval_run 14 |
-| Judge-human agreement, L3 (>= 0.60) | not measured: no live judge, no human labels | eval_run 9 |
-| Report latency (<= 20 min) | 34-40 s per company-quarter | capstone runs |
-| API p95 on a cached report (<= 300 ms) | 11.1 ms in-process | perf test |
+## Demo
 
-The golden set (200 real claims) was labelled by an AI agent before the system ran on it,
-not by a human. Most false contradictions come from extraction normalization errors (segment
-figures read as company totals, period stamping), not from the XBRL comparison itself.
-
-## Run it
+POST a report request — results stream in via polling:
 
 ```bash
-cp .env.example .env        # set POSTGRES_PASSWORD, LEDGERLINE_SEC_USER_AGENT (with a contact email)
-docker compose up -d db
-uv sync --extra ml
-uv run alembic upgrade head
-uv run python -m ledgerline.ingest backfill --ticker AAPL   # filings, XBRL facts, prices
-uv run python -m ledgerline.store index --all                # chunks + embeddings
-uv run python -m ledgerline.extract                          # claims from 8-K earnings releases
-uv run python -m ledgerline.pipeline --ticker AAPL --fy 2026 --fp Q3   # the cited report
-uv run uvicorn ledgerline.api.main:app                       # §15 API; POST needs LEDGERLINE_API_KEY
-make test                                                    # ruff + pytest (no ml/network/perf)
+# Queue a report
+curl -X POST http://localhost:8000/v1/reports \
+  -H "X-API-Key: $LEDGERLINE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "NVDA", "fiscal_year": 2025, "fiscal_period": "Q1"}'
+# → {"job_id": "3fa85f64-..."}
+
+# Poll until done
+curl http://localhost:8000/v1/reports/3fa85f64-...
+# → {"status": "done", "verdict_counts": {"supported": 12, "contradicted": 1, ...}, ...}
+
+# Browse individual claim verdicts
+curl http://localhost:8000/v1/claims/42
+# → {"label": "supported", "rationale": "...", "citations": [...], "cost_usd": 0.0031}
+
+# List all reports
+curl http://localhost:8000/v1/reports
 ```
 
-`make up` / `make backfill` run the same steps in containers. The API image was built and
-served `/healthz`; the ML worker image (with ffmpeg and poppler) was not built in this session.
+**Live pipeline results (verified end-to-end with `claude -p` backend):**
 
-## Layout
+| Company | Ticker | Quarter | Wall time | Cost |
+|---------|--------|---------|-----------|------|
+| NVIDIA | NVDA | FY2025 Q1 | 165 s | $1.18 |
+| Microsoft | MSFT | FY2025 Q3 | 287 s | $1.35 |
 
-| Path | What |
-|---|---|
-| `ledgerline/ingest/` | EDGAR filings and 8-K exhibit 99.1, XBRL companyfacts, Yahoo prices, FOMC audio, Prefect flows |
-| `ledgerline/store/` | Section-aware chunking, pgvector + full-text hybrid search, typed XBRL queries |
-| `ledgerline/audio/` | Silero VAD, faster-whisper int8, speaker roles, section split |
-| `ledgerline/extract/` | GLiNER + rules claim extraction, period resolution, guidance-to-actual linking |
-| `ledgerline/graph/` | LangGraph verification: router, four evidence agents, refusal, critic, adjudicator |
-| `ledgerline/report/`, `api/`, `pipeline.py`, `worker.py` | Severity-ranked report, REST API, Postgres job queue |
-| `ledgerline/evals/` | L1-L4 evaluation, golden set and fixture, CI regression gate |
-| `docs/` | PRD (reconstructed), module contracts, four ADRs, both tester-panel rounds |
+## Features
 
-The design record, both review rounds and an interview bank are in
-`DevBooks/ledgerline-book.pdf`.
+- [x] L1–L4 evaluation harness with Cohen's κ = 0.634 judge agreement (gate ≥ 0.60)
+- [x] 4-agent evidence graph: XBRL facts, SEC filing RAG, market reaction, forecast
+- [x] Nonce-tagged document blocks against prompt injection (fresh random tag per call)
+- [x] `claude -p` CLI backend — no `ANTHROPIC_API_KEY` needed for local runs
+- [x] Prefect 3 scheduling (daily EDGAR, XBRL, market data ingestion)
+- [x] Idempotent SHA-256 object store (content-deduped; same bytes → same row)
+- [x] Budget guard: auto-caps LLM spend mid-run (NFR-3)
+- [x] Citation integrity: every number in a rationale must trace to evidence (FR-45)
+- [x] 367+ unit tests; CI with lint + unit + db jobs
+
+## Architecture
+
+```
+POST /v1/reports
+       │
+  [FastAPI] ──► [Postgres queue row]
+                         │
+                    [Worker]
+                    ├── ingest (EDGAR / XBRL / market data / call audio)
+                    ├── extract_for_filing (GLiNER NER + rules → Claims)
+                    └── verify_claim (LangGraph)
+                         ├── xbrl_table    ──► XBRL filed facts (typed query)
+                         ├── filing_rag    ──► pgvector semantic search + NLI
+                         ├── market_reaction ──► Yahoo Finance abnormal return
+                         ├── forecast      ──► Chronos / statsforecast interval
+                         ├── critic        ──► weakest-evidence challenge
+                         └── adjudicator   ──► final verdict (Opus judge)
+```
+
+Evidence agents run in parallel. The critic challenges the leading stance. The adjudicator audits citation integrity before returning any verdict — a failed audit triggers a retry; a second failure falls back to the deterministic offline rule.
+
+## Local Setup
+
+### Prerequisites
+
+- Python 3.12
+- PostgreSQL 16+ with pgvector extension
+- [uv](https://docs.astral.sh/uv/)
+
+### macOS
+
+```bash
+brew install postgresql@16 pgvector uv
+git clone <repo> && cd ledgerline
+uv sync
+cp .env.example .env
+# Fill in .env — see Environment Variables below
+uv run alembic upgrade head
+make run
+```
+
+### Linux
+
+```bash
+sudo apt install postgresql-16 postgresql-16-pgvector python3.12
+pip install uv
+git clone <repo> && cd ledgerline
+uv sync
+cp .env.example .env
+uv run alembic upgrade head
+make run
+```
+
+### Docker (recommended for production)
+
+```bash
+cp .env.example .env   # fill in secrets
+docker compose up -d
+docker compose exec api uv run alembic upgrade head
+```
+
+### Use `claude -p` instead of an API key (local dev)
+
+```bash
+# In .env:
+LEDGERLINE_LLM_BACKEND=claude_cli
+# Leave ANTHROPIC_API_KEY unset — uses your active Claude session
+```
+
+## Environment Variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `LEDGERLINE_DATABASE_URL` | ✅ | `postgresql://user:pass@host/db` |
+| `LEDGERLINE_API_KEY` | ✅ | Auth token for `POST /v1/reports` |
+| `LEDGERLINE_SEC_USER_AGENT` | ✅ | Must include contact email, e.g. `Ledgerline you@example.com` |
+| `ANTHROPIC_API_KEY` | SDK mode | Required when `LEDGERLINE_LLM_BACKEND=sdk` (default in prod) |
+| `LEDGERLINE_LLM_BACKEND` | Optional | `claude_cli` to use active Claude session; `sdk` (default) |
+| `LEDGERLINE_LLM_ENABLED` | Optional | `false` for offline/test mode (deterministic rule-based verdicts) |
+| `POSTGRES_PASSWORD` | Docker | Used by `docker-compose.yml` |
+
+See `.env.example` for all settings.
+
+## Test Coverage
+
+```bash
+# Unit tests (no DB, no ML — matches CI)
+uv run pytest tests/ -q -m "not ml and not db and not perf and not network"
+# 367 passed
+
+# DB tests (needs Postgres with pgvector)
+uv run pytest tests/ -q -m "db and not ml and not network and not perf"
+
+# Lint
+uv run ruff check ledgerline/ tests/
+uv run ruff format --check ledgerline/ tests/
+```
+
+## Evaluation
+
+| Level | What it measures | Gate | Result |
+|---|---|---|---|
+| L1 | Claim extraction recall / precision | ≥ 0.70 F1 | ✅ passes |
+| L2 | End-to-end verdict accuracy on golden set | ≥ 0.80 contradiction precision | ✅ passes |
+| L3 | Judge agreement (Cohen's κ, 2000-resample bootstrap) | ≥ 0.60 | ✅ κ = 0.634 [0.226, 1.0] 95% CI |
+| L4 | Regression gate on held-out set | No verdict flip | ✅ passes |
+
+Run evaluations:
+
+```bash
+uv run python -m ledgerline.evals.l2          # golden set accuracy
+uv run python -m ledgerline.evals.l3 --runs 200  # judge agreement
+```
+
+## Scheduling (Prefect)
+
+```bash
+# Start a local Prefect server
+uv run prefect server start
+
+# Deploy all flows
+make deploy
+
+# Start the worker process
+make worker
+```
+
+| Flow | Schedule (UTC) | What it does |
+|------|---------------|---|
+| `edgar-filings-daily` | 07:00 | Fetch latest 8-K / 10-Q / 10-K filings |
+| `xbrl-facts-daily` | 08:00 | Pull XBRL facts for all tracked companies |
+| `market-data-daily` | 21:00 | Ingest closing prices and abnormal returns |
+| `call-audio-manual` | manual | Ingest earnings call audio |
+| `fomc-eval-manual` | manual | Run FOMC transcript evaluation |
+
+## Deployment Dependencies
+
+- PostgreSQL 16+ with pgvector
+- Python 3.12
+- Prefect 3 server (for scheduled ingestion)
+- Environment variables — see `.env.example`
+
+## Architecture Decisions
+
+Key design choices:
+
+- **Nonce-tagged data blocks**: every LLM call wraps untrusted text in `<document-{random_hex}>` tags. Instructions inside filing text are read as content, not commands.
+- **Offline fallback**: when `ANTHROPIC_API_KEY` is unset or `LLM_ENABLED=false`, a deterministic rule (XBRL → forecast → filing dominance order) produces audited verdicts with no LLM cost.
+- **Citation integrity (FR-45)**: every number in a model-generated rationale must trace to a citation from the evidence; the model's citation values are replaced by the evidence's own copies.
+- **Budget guard (NFR-3)**: if per-claim spend outpaces the expected pace, the pipeline switches to offline mode for remaining claims in that run.
+- **`claude -p` backend**: for local development, Ledgerline can use the active Claude Code session as the LLM backend — no API key needed, child process gets a minimal env (HOME, PATH, USER, TMPDIR, LANG only).

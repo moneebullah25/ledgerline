@@ -320,7 +320,22 @@ def _verify_claims(s: Session, report: Report, claims: list[Claim]) -> None:
                         s, report, claim, tracer, load_prompt("adjudicator")[1], e, reason
                     )
                 else:
-                    v = _persist(s, report, claim, result, tracer)
+                    try:
+                        v = _persist(s, report, claim, result, tracer)
+                    except INFRA_ERRORS:
+                        raise
+                    except Exception as pe:
+                        log.exception("report %s claim %s: _persist failed", report.id, claim.id)
+                        s.rollback()
+                        v = _persist_no_verdict(
+                            s,
+                            report,
+                            claim,
+                            tracer,
+                            load_prompt("adjudicator")[1],
+                            pe,
+                            "internal error while recording the result",
+                        )
                 spent += v.cost_usd
                 finished += 1
                 pace = (COST_BUDGET_USD - extract_cost) * finished / len(claims)

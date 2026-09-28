@@ -135,6 +135,9 @@ def structured[T: BaseModel](
         f'<{tag} label="{label}">\n{_neutralise(text)}\n</{tag}>' for label, text in data.items()
     )
     prompt = f"{docs}\n\n{instruction}"
+    for label in data:
+        if not re.fullmatch(r"[a-z_]+", label):
+            raise ValueError(f"document label must be [a-z_]+, got {label!r}")
     if settings().llm_backend == "claude_cli":
         return _structured_cli(model, system, prompt, schema)
     import anthropic
@@ -154,6 +157,8 @@ def structured[T: BaseModel](
     except anthropic.APIStatusError as e:  # auth, overload, server errors; a 400 is ours
         if e.status_code in (401, 403) or e.status_code >= 500:
             raise LLMUnavailable(f"{model}: unavailable (HTTP {e.status_code})") from e
+        if e.status_code == 404:
+            raise LLMUnavailable(f"{model}: model not found (HTTP 404)") from e
         raise
     except ValidationError as e:
         log.warning("%s output failed %s validation: %s", model, schema.__name__, e)
@@ -179,7 +184,8 @@ RETRY_WAITS_S = (15, 60, 180, 600)
 # ordinary text.
 _TRANSIENT = re.compile(
     r"rate[ _]limit|overloaded|usage limit|session limit"
-    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:429|529)\b"
+    r"|connection|network|econn|econnrefused|fetch failed|socket"
+    r"|\b(?:api error|status(?: code)?|http)\W{0,3}(?:429|529|5\d\d)\b"
 )
 _AUTH = re.compile(
     r"invalid api key|/login|not logged in|authentication_error|oauth token|credit balance"
@@ -265,9 +271,15 @@ def _structured_cli[T: BaseModel](
                 raise LLMUnavailable(f"{model}: timed out after {len(RETRY_WAITS_S)} retries")
             raise RateLimited(f"{model}: still rate-limited after {len(RETRY_WAITS_S)} retries")
         time.sleep(wait)
-    if out.get("is_error") or out.get("structured_output") is None:
+    if out.get("is_error"):
+        subtype = str(out.get("subtype") or "")
         log.warning("%s CLI error result: %s", model, str(out.get("result"))[:500])
-        raise _bad_output(model, schema, str(out.get("subtype") or "no structured output"))
+        if "validation" not in subtype and "schema" not in subtype:
+            raise LLMUnavailable(f"{model}: CLI returned error ({subtype or 'unknown'})")
+        raise _bad_output(model, schema, subtype)
+    if out.get("structured_output") is None:
+        log.warning("%s CLI no structured_output: %s", model, str(out.get("result"))[:500])
+        raise _bad_output(model, schema, "no structured output")
     try:
         parsed = schema.model_validate(out["structured_output"])
     except ValidationError as e:

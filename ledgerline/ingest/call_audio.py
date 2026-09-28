@@ -47,7 +47,11 @@ def ingest_call_audio(
             raise ValueError(
                 f"audio URL not allowed (https + LEDGERLINE_AUDIO_HOSTS): {path_or_url}"
             )
-        data, source_url = get(path_or_url, {}, max_bytes=MAX_AUDIO_BYTES), path_or_url
+        allowed = frozenset(h.lower() for h in settings().audio_hosts)
+        data, source_url = (
+            get(path_or_url, {}, max_bytes=MAX_AUDIO_BYTES, allowed_hosts=allowed),
+            path_or_url,
+        )
     else:
         p = Path(path_or_url).resolve()
         if not p.is_relative_to(settings().data_dir.resolve()):

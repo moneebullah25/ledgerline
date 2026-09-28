@@ -85,7 +85,11 @@ def _retry_after(value: str | None) -> float | None:
     reraise=True,
 )
 def get(
-    url: str, headers: dict[str, str], throttle: bool = False, max_bytes: int = MAX_BYTES
+    url: str,
+    headers: dict[str, str],
+    throttle: bool = False,
+    max_bytes: int = MAX_BYTES,
+    allowed_hosts: frozenset[str] | None = None,
 ) -> bytes:
     if not url.startswith("https://"):
         raise ValueError(f"refusing non-https URL {url}")
@@ -94,6 +98,8 @@ def get(
     with _client.stream("GET", url, headers=headers) as r:
         if r.url.scheme != "https":
             raise ValueError(f"redirected to non-https URL {r.url}")
+        if allowed_hosts is not None and r.url.host not in allowed_hosts:
+            raise ValueError(f"redirect to disallowed host {r.url.host}")
         if r.status_code == 429 or r.status_code >= 500:
             raise TransientFetchError(
                 f"HTTP {r.status_code} for {url}", _retry_after(r.headers.get("Retry-After"))

@@ -11,6 +11,7 @@ are public. Every 422 has FastAPI's list shape: {"detail": [{"loc", "msg", "type
 
 import base64
 import hmac
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
@@ -33,14 +34,17 @@ from ledgerline.models import Claim, Company, EvalRun, Evidence, Report, Span, V
 from ledgerline.pipeline import FY_UNSUPPORTED
 from ledgerline.report.generate import ReportView, build_report
 
-# Backlog cap: beyond it POST answers 429 instead of growing the queue.
-# ponytail: soft cap - the count is not under a lock shared across quarters, so concurrent POSTs
-# for different quarters can overshoot it by a few; a global advisory lock makes it hard.
-MAX_QUEUED = 50
 CURSOR_ID_MAX_LEN = 36  # a UUID; claim ids are far shorter
 INT4_MAX = 2**31 - 1  # claim.id is a Postgres integer
 
 app = FastAPI(title="Ledgerline", version="1.0.0")
+_log = logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def _unhandled(_req, exc: Exception) -> JSONResponse:
+    _log.exception("unhandled error")
+    return JSONResponse({"detail": "internal error"}, status_code=500)
 
 
 def get_session() -> Iterator[Session]:
@@ -262,11 +266,6 @@ def create_report(body: ReportRequest, s: DB, response: Response) -> Job:
         .limit(1)
     )
     if report is None:
-        queued = s.scalar(select(func.count()).where(Report.status == "queued"))
-        if queued >= MAX_QUEUED:
-            raise HTTPException(
-                429, f"{queued} reports already queued; retry later", headers={"Retry-After": "60"}
-            )
         pending = s.scalar(select(func.count()).where(Report.status.in_(("queued", "running"))))
         if pending >= settings().max_pending_reports:
             raise HTTPException(429, "too many pending reports", headers={"Retry-After": "60"})

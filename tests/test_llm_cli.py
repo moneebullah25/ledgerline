@@ -45,8 +45,9 @@ def test_cli_structured_output_and_usage(fake_claude):
 
 
 def test_cli_error_raises(fake_claude):
+    # Generic CLI errors (non-schema) are infrastructure failures, not per-claim refusals.
     fake_claude({"is_error": True, "subtype": "error_max_turns", "result": None})
-    with pytest.raises(ValueError, match="error_max_turns"):
+    with pytest.raises(llm.LLMUnavailable, match="error_max_turns"):
         llm.structured("fast", "sys", {}, "Go.", CriticOutput)
 
 
@@ -109,6 +110,8 @@ def test_cli_timeout_is_retried_then_infrastructure(fake_claude, monkeypatch):
 
 
 def test_cli_bare_status_number_is_not_transient(fake_claude, monkeypatch):
+    # A bare 429 in the result text is not a rate-limit signal; it should not trigger a retry.
+    # Generic CLI errors raise LLMUnavailable (infra failure), not ValueError.
     monkeypatch.setattr(llm.time, "sleep", lambda s: pytest.fail("retried"))
     fake_claude(
         {
@@ -117,7 +120,7 @@ def test_cli_bare_status_number_is_not_transient(fake_claude, monkeypatch):
             "result": "revenue of $429 million and 529 stores",
         }
     )
-    with pytest.raises(ValueError, match="error_during_execution") as e:
+    with pytest.raises(llm.LLMUnavailable, match="error_during_execution") as e:
         llm.structured("fast", "sys", {}, "Go.", CriticOutput)
     assert "429" not in str(e.value)  # model/CLI text stays out of the message
 
@@ -132,10 +135,14 @@ def test_cli_invalid_output_message_is_fixed(fake_claude):
 
 
 def test_cli_stderr_is_logged_not_raised(fake_claude, caplog, monkeypatch):
+    # CLI crash (non-JSON stdout, non-zero exit) → LLMUnavailable; stderr goes to log only.
     monkeypatch.setattr(llm.log, "disabled", False)  # alembic's fileConfig disables loggers
     d = fake_claude({})
     (d / "claude").write_text("#!/bin/sh\ncat > /dev/null\necho 'STDERR-SECRET' >&2\nexit 1\n")
-    with caplog.at_level(logging.WARNING, logger=llm.log.name), pytest.raises(ValueError) as e:
+    with (
+        caplog.at_level(logging.WARNING, logger=llm.log.name),
+        pytest.raises(llm.LLMUnavailable) as e,
+    ):
         llm.structured("fast", "sys", {}, "Go.", CriticOutput)
     assert "STDERR-SECRET" not in str(e.value) and "STDERR-SECRET" in caplog.text
 
